@@ -1,0 +1,550 @@
+# ============================================================
+#  YakirOS Example Component Declarations
+#  /etc/graph.d/*.toml
+#
+#  These represent a minimal LFS system managed by graph-resolver.
+#  Copy individual files to /etc/graph.d/ in your LFS build.
+# ============================================================
+
+
+# ─────────────────────────────────────────
+#  Layer 2: Filesystem (Layer 0-1 handled by kernel + resolver)
+# ─────────────────────────────────────────
+
+# === mount-root-rw.toml ===
+# Remount root filesystem read-write
+
+[component]
+name = "mount-root-rw"
+binary = "/bin/mount"
+args = ["-o", "remount,rw", "/"]
+type = "oneshot"
+
+[provides]
+capabilities = ["filesystem.root.rw"]
+
+[requires]
+capabilities = ["filesystem.proc"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === mount-var.toml ===
+# Mount /var (if separate partition) or just ensure it exists
+
+[component]
+name = "mount-var"
+binary = "/bin/mkdir"
+args = ["-p", "/var/log", "/var/run", "/var/tmp"]
+type = "oneshot"
+
+[provides]
+capabilities = ["filesystem.var"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === mount-home.toml ===
+# Mount /home (if separate partition)
+
+[component]
+name = "mount-home"
+binary = "/bin/mkdir"
+args = ["-p", "/home"]
+type = "oneshot"
+
+[provides]
+capabilities = ["filesystem.home"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"
+
+
+# ─────────────────────────────────────────
+#  Layer 3: Hardware / Device Management
+# ─────────────────────────────────────────
+
+# === udevd.toml ===
+# Device manager — populates /dev, loads firmware, creates device nodes
+
+[component]
+name = "udevd"
+binary = "/sbin/udevd"
+args = ["--daemon"]
+
+[provides]
+capabilities = ["hardware.udev"]
+
+[requires]
+capabilities = ["filesystem.dev", "filesystem.sys", "filesystem.run"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "none"
+health_check = "/usr/libexec/graph/check-udevd"
+health_interval = 60
+
+
+# === udev-trigger.toml ===
+# Trigger udev to process existing devices
+
+[component]
+name = "udev-trigger"
+binary = "/sbin/udevadm"
+args = ["trigger", "--action=add"]
+type = "oneshot"
+
+[provides]
+capabilities = ["hardware.devices.triggered"]
+
+[requires]
+capabilities = ["hardware.udev"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === udev-settle.toml ===
+# Wait for udev to finish processing
+
+[component]
+name = "udev-settle"
+binary = "/sbin/udevadm"
+args = ["settle", "--timeout=30"]
+type = "oneshot"
+
+[provides]
+capabilities = ["hardware.devices.settled"]
+
+[requires]
+capabilities = ["hardware.devices.triggered"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === hwclock.toml ===
+# Set system clock from hardware clock
+
+[component]
+name = "hwclock"
+binary = "/sbin/hwclock"
+args = ["--hctosys", "--utc"]
+type = "oneshot"
+
+[provides]
+capabilities = ["hardware.clock"]
+
+[requires]
+capabilities = ["filesystem.dev"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === seed-entropy.toml ===
+# Seed the kernel entropy pool
+
+[component]
+name = "seed-entropy"
+binary = "/bin/sh"
+args = ["-c", "cat /var/lib/random-seed > /dev/urandom 2>/dev/null; true"]
+type = "oneshot"
+
+[provides]
+capabilities = ["hardware.entropy"]
+
+[requires]
+capabilities = ["filesystem.dev", "filesystem.var"]
+
+[lifecycle]
+handoff = "none"
+
+
+# ─────────────────────────────────────────
+#  Layer 4: Core System Services
+# ─────────────────────────────────────────
+
+# === syslogd.toml ===
+# System logging daemon
+
+[component]
+name = "syslogd"
+binary = "/usr/sbin/syslogd"
+args = ["-n"]
+
+[provides]
+capabilities = ["logging"]
+sockets = ["/dev/log"]
+
+[requires]
+capabilities = ["filesystem.var", "filesystem.run"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "fd-passing"
+health_check = "/usr/libexec/graph/check-syslogd"
+health_interval = 30
+
+[resources]
+memory_max = "64M"
+
+
+# === klogd.toml ===
+# Kernel log daemon (reads from /proc/kmsg, forwards to syslog)
+
+[component]
+name = "klogd"
+binary = "/usr/sbin/klogd"
+args = ["-n"]
+
+[provides]
+capabilities = ["logging.kernel"]
+
+[requires]
+capabilities = ["logging", "filesystem.proc"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "none"
+
+
+# === dbus-daemon.toml ===
+# System message bus
+
+[component]
+name = "dbus-daemon"
+binary = "/usr/bin/dbus-daemon"
+args = ["--system", "--nofork"]
+
+[provides]
+capabilities = ["dbus"]
+sockets = ["/run/dbus/system_bus_socket"]
+
+[requires]
+capabilities = ["filesystem.run"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "fd-passing"
+health_check = "/usr/libexec/graph/check-dbus"
+health_interval = 60
+
+
+# === ldconfig.toml ===
+# Rebuild shared library cache
+
+[component]
+name = "ldconfig"
+binary = "/sbin/ldconfig"
+args = []
+type = "oneshot"
+
+[provides]
+capabilities = ["libs.cached"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"
+
+
+# ─────────────────────────────────────────
+#  Layer 5: Networking
+# ─────────────────────────────────────────
+
+# === loopback.toml ===
+# Bring up loopback interface
+
+[component]
+name = "loopback"
+binary = "/sbin/ip"
+args = ["link", "set", "lo", "up"]
+type = "oneshot"
+
+[provides]
+capabilities = ["network.loopback"]
+
+[requires]
+capabilities = ["filesystem.sys"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === loopback-addr.toml ===
+# Assign loopback address
+
+[component]
+name = "loopback-addr"
+binary = "/sbin/ip"
+args = ["addr", "add", "127.0.0.1/8", "dev", "lo"]
+type = "oneshot"
+
+[provides]
+capabilities = ["network"]
+
+[requires]
+capabilities = ["network.loopback"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === dhcpcd.toml ===
+# DHCP client — configure network interface(s)
+
+[component]
+name = "dhcpcd"
+binary = "/sbin/dhcpcd"
+args = ["-B", "-q"]
+
+[provides]
+capabilities = ["network.configured"]
+
+[requires]
+capabilities = ["hardware.devices.settled", "network"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "state-file"
+state_file = "/run/dhcpcd.state"
+health_check = "/usr/libexec/graph/check-network"
+health_interval = 60
+
+
+# === nftables.toml ===
+# Load firewall rules
+
+[component]
+name = "nftables"
+binary = "/usr/sbin/nft"
+args = ["-f", "/etc/nftables.conf"]
+type = "oneshot"
+
+[provides]
+capabilities = ["network.firewall"]
+
+[requires]
+capabilities = ["network"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === resolved.toml ===
+# DNS resolver (could be a stub resolver or a local caching resolver)
+# Alternative: just ensure /etc/resolv.conf exists
+
+[component]
+name = "dns-setup"
+binary = "/bin/sh"
+args = ["-c", "test -f /etc/resolv.conf && echo 'DNS ready'"]
+type = "oneshot"
+
+[provides]
+capabilities = ["network.dns"]
+
+[requires]
+capabilities = ["network.configured"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === ntpd.toml ===
+# NTP time synchronization
+
+[component]
+name = "ntpd"
+binary = "/usr/sbin/ntpd"
+args = ["-n", "-g"]
+
+[provides]
+capabilities = ["time.synced"]
+
+[requires]
+capabilities = ["network.dns"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "state-file"
+state_file = "/var/lib/ntp/ntp.drift"
+health_interval = 120
+
+
+# ─────────────────────────────────────────
+#  Layer 6: User Infrastructure
+# ─────────────────────────────────────────
+
+# === users.toml ===
+# Verify user database exists (passwd, group, shadow)
+
+[component]
+name = "users"
+binary = "/bin/sh"
+args = ["-c", "test -f /etc/passwd && test -f /etc/group"]
+type = "oneshot"
+
+[provides]
+capabilities = ["users"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === ssh-keygen.toml ===
+# Generate SSH host keys if they don't exist
+
+[component]
+name = "ssh-keygen"
+binary = "/bin/sh"
+args = ["-c", "test -f /etc/ssh/ssh_host_ed25519_key || ssh-keygen -A"]
+type = "oneshot"
+
+[provides]
+capabilities = ["ssh.hostkeys"]
+
+[requires]
+capabilities = ["hardware.entropy", "filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"
+
+
+# === sshd.toml ===
+# OpenSSH server
+
+[component]
+name = "sshd"
+binary = "/usr/sbin/sshd"
+args = ["-D"]
+
+[provides]
+capabilities = ["ssh"]
+
+[requires]
+capabilities = ["network.configured", "ssh.hostkeys", "users"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+handoff = "fd-passing"
+health_check = "/usr/libexec/graph/check-sshd"
+health_interval = 60
+
+
+# === getty-tty1.toml ===
+# Virtual console login prompt
+
+[component]
+name = "getty-tty1"
+binary = "/sbin/agetty"
+args = ["--noclear", "tty1", "linux"]
+
+[provides]
+capabilities = ["console.tty1"]
+
+[requires]
+capabilities = ["filesystem.dev", "users"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+handoff = "none"
+health_interval = 10
+
+
+# === getty-tty2.toml ===
+# Second virtual console
+
+[component]
+name = "getty-tty2"
+binary = "/sbin/agetty"
+args = ["tty2", "linux"]
+
+[provides]
+capabilities = ["console.tty2"]
+
+[requires]
+capabilities = ["filesystem.dev", "users"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+handoff = "none"
+
+
+# ─────────────────────────────────────────
+#  Layer 7: Application Services (examples)
+# ─────────────────────────────────────────
+
+# === httpd.toml ===
+# Example: a web server
+
+# [component]
+# name = "httpd"
+# binary = "/usr/sbin/httpd"
+# args = ["-D", "FOREGROUND"]
+#
+# [provides]
+# capabilities = ["http"]
+#
+# [requires]
+# capabilities = ["network.configured", "logging", "users"]
+#
+# [lifecycle]
+# reload_signal = "SIGHUP"
+# handoff = "fd-passing"
+# health_check = "/usr/libexec/graph/check-httpd"
+# health_interval = 30
+
+
+# === postgres.toml ===
+# Example: PostgreSQL
+
+# [component]
+# name = "postgres"
+# binary = "/usr/bin/postgres"
+# args = ["-D", "/var/lib/postgresql/data"]
+#
+# [provides]
+# capabilities = ["database.postgres"]
+# sockets = ["/run/postgresql/.s.PGSQL.5432"]
+#
+# [requires]
+# capabilities = ["filesystem.var", "users", "network"]
+#
+# [optional]
+# capabilities = ["logging"]
+#
+# [lifecycle]
+# reload_signal = "SIGHUP"
+# handoff = "fd-passing"
+# health_check = "/usr/libexec/graph/check-postgres"
+# health_interval = 30

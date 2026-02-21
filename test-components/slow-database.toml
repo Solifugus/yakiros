@@ -1,0 +1,11 @@
+[component]
+name = "slow-database"
+type = "service"
+binary = "./test-components/slow-database.sh"
+
+[provides]
+capabilities = ["database"]
+
+[lifecycle]
+readiness_file = "/tmp/slow-database.ready"
+readiness_timeout = 15

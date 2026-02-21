@@ -1,0 +1,11 @@
+[component]
+name = "log-daemon"
+type = "service"
+binary = "/usr/sbin/syslogd"
+
+[provides]
+capabilities = ["logging"]
+
+[lifecycle]
+readiness_signal = "SIGUSR1"
+readiness_timeout = 10

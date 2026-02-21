@@ -1,0 +1,7 @@
+[component]
+name = "broken-service"
+type = "service"
+binary = /usr/bin/bad-syntax-missing-quotes
+args = ["--test"]
+
+requires = ["network"

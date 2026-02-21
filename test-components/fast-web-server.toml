@@ -1,0 +1,11 @@
+[component]
+name = "fast-web-server"
+type = "service"
+binary = "./test-components/fast-web-server.sh"
+
+[provides]
+capabilities = ["http-server"]
+
+[lifecycle]
+readiness_file = "/tmp/fast-web-server.ready"
+readiness_timeout = 30

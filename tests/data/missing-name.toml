@@ -1,0 +1,6 @@
+[component]
+type = "service"
+binary = "/usr/bin/unnamed-service"
+
+[requires]
+capabilities = ["network"]

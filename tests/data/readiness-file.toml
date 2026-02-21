@@ -1,0 +1,15 @@
+[component]
+name = "web-server"
+type = "service"
+binary = "/usr/bin/nginx"
+args = ["-g", "daemon off;"]
+
+[requires]
+capabilities = ["network"]
+
+[provides]
+capabilities = ["http-server"]
+
+[lifecycle]
+readiness_file = "/run/nginx.ready"
+readiness_timeout = 30

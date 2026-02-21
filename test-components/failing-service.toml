@@ -1,0 +1,11 @@
+[component]
+name = "failing-service"
+type = "service"
+binary = "./test-components/failing-service.sh"
+
+[provides]
+capabilities = ["broken-service"]
+
+[lifecycle]
+readiness_file = "/tmp/failing-service.ready"
+readiness_timeout = 8

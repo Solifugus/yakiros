@@ -1,0 +1,19 @@
+[component]
+name = "database-server"
+type = "service"
+binary = "/usr/bin/postgres"
+args = ["--config-file", "/etc/postgresql/postgresql.conf", "--data", "/var/lib/postgres"]
+
+[requires]
+capabilities = ["filesystem", "network", "logging"]
+
+[provides]
+capabilities = ["database", "postgresql"]
+
+[optional]
+capabilities = ["monitoring"]
+
+[lifecycle]
+reload_signal = "SIGHUP"
+health_check = "/usr/bin/pg_isready"
+health_interval = 30

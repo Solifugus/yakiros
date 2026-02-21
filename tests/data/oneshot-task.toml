@@ -1,0 +1,11 @@
+[component]
+name = "mount-filesystems"
+type = "oneshot"
+binary = "/bin/mount"
+args = ["-a"]
+
+[requires]
+capabilities = ["kernel"]
+
+[provides]
+capabilities = ["filesystem"]

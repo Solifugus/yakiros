@@ -1,0 +1,15 @@
+[component]
+name = "postgres"
+type = "service"
+binary = "/usr/bin/postgres"
+
+[requires]
+capabilities = ["filesystem"]
+
+[provides]
+capabilities = ["database"]
+
+[lifecycle]
+readiness_check = "/usr/bin/pg_isready -h localhost"
+readiness_timeout = 60
+readiness_interval = 5

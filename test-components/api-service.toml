@@ -1,0 +1,15 @@
+[component]
+name = "api-service"
+type = "service"
+binary = "./test-components/api-service.sh"
+
+[requires]
+capabilities = ["network"]
+
+[provides]
+capabilities = ["api"]
+
+[lifecycle]
+readiness_check = "./test-components/api-health-check.sh"
+readiness_timeout = 30
+readiness_interval = 5

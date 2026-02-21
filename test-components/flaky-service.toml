@@ -1,0 +1,15 @@
+[component]
+name = "flaky-service"
+type = "service"
+binary = "./test-components/flaky-service.sh"
+
+[requires]
+capabilities = ["logging"]
+
+[provides]
+capabilities = ["flaky-capability"]
+
+[lifecycle]
+readiness_check = "./test-components/flaky-health-check.sh"
+readiness_timeout = 20
+readiness_interval = 3

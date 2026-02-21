@@ -1,0 +1,11 @@
+[component]
+name = "log-daemon"
+type = "service"
+binary = "./test-components/log-daemon.sh"
+
+[provides]
+capabilities = ["logging"]
+
+[lifecycle]
+readiness_signal = "SIGUSR1"
+readiness_timeout = 10
