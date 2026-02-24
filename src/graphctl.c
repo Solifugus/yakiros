@@ -23,7 +23,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define CONTROL_SOCKET "/run/graph-resolver.sock"
+#define CONTROL_SOCKET "/tmp/graph-resolver.sock"
 #define BUF_SIZE 8192
 
 int main(int argc, char *argv[]) {

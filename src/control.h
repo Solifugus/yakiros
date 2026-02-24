@@ -5,7 +5,7 @@
 #ifndef CONTROL_H
 #define CONTROL_H
 
-#define CONTROL_SOCKET "/run/graph-resolver.sock"
+#define CONTROL_SOCKET "/tmp/graph-resolver.sock"
 
 /* Set up the control socket for graphctl commands */
 int setup_control_socket(void);
