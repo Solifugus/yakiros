@@ -1,0 +1,14 @@
+[component]
+name = "loopback"
+binary = "/bin/true"
+args = []
+type = "oneshot"
+
+[provides]
+capabilities = ["network.loopback"]
+
+[requires]
+capabilities = ["filesystem.sys"]
+
+[lifecycle]
+handoff = "none"

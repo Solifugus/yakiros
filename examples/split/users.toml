@@ -1,0 +1,14 @@
+[component]
+name = "users"
+binary = "/bin/sh"
+args = ["-c", "test -f /etc/passwd && test -f /etc/group"]
+type = "oneshot"
+
+[provides]
+capabilities = ["users"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"

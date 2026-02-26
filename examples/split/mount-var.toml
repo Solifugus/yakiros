@@ -1,0 +1,14 @@
+[component]
+name = "mount-var"
+binary = "/bin/mkdir"
+args = ["-p", "/var/log", "/var/run", "/var/tmp"]
+type = "oneshot"
+
+[provides]
+capabilities = ["filesystem.var"]
+
+[requires]
+capabilities = ["filesystem.root.rw"]
+
+[lifecycle]
+handoff = "none"

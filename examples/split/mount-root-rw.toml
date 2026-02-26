@@ -1,0 +1,14 @@
+[component]
+name = "mount-root-rw"
+binary = "/bin/mount"
+args = ["-o", "remount,rw", "/"]
+type = "oneshot"
+
+[provides]
+capabilities = ["filesystem.root.rw"]
+
+[requires]
+capabilities = ["filesystem.proc"]
+
+[lifecycle]
+handoff = "none"
