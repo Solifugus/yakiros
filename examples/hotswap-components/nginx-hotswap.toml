@@ -1,0 +1,39 @@
+[component]
+name = "nginx"
+binary = "/usr/sbin/nginx"
+args = ["-g", "daemon off;"]
+type = "service"
+
+[provides]
+capabilities = ["http", "web.server"]
+sockets = ["/run/nginx.sock"]
+
+[requires]
+capabilities = ["network.configured", "filesystem.var"]
+
+[optional]
+capabilities = ["logging", "ssl.certificates"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: File descriptor passing for zero-downtime upgrades
+handoff = "fd-passing"
+reload_signal = "SIGUSR1"
+restart_max = 3
+restart_window = 60
+
+# READINESS PROTOCOL: Command-based readiness check
+readiness_check = "/usr/bin/curl -f http://localhost/health || /usr/bin/nc -z localhost 80"
+readiness_timeout = 30
+readiness_interval = 5
+
+[resources]
+memory_max = "256M"
+
+# Hot-swap specific configuration
+[hotswap]
+# File descriptors that will be transferred during hot-swap
+transfer_fds = ["listening_sockets", "unix_sockets"]
+# Environment variables to pass to new process
+env_vars = ["NGINX_HOTSWAP=1", "NGINX_MASTER_PID=$PID"]
+# Grace period for old process shutdown
+shutdown_grace = 10

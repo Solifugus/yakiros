@@ -1,0 +1,41 @@
+[component]
+name = "sshd"
+binary = "/usr/sbin/sshd"
+args = ["-D", "-f", "/etc/ssh/sshd_config"]
+type = "service"
+
+[provides]
+capabilities = ["ssh", "remote.access"]
+
+[requires]
+capabilities = ["network.configured", "ssh.hostkeys", "users"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: Zero-downtime SSH server upgrades
+handoff = "fd-passing"
+reload_signal = "SIGHUP"
+restart_max = 5
+restart_window = 30
+
+# READINESS PROTOCOL: Check SSH port accessibility
+readiness_check = "/usr/bin/nc -z localhost 22"
+readiness_timeout = 15
+readiness_interval = 3
+
+[resources]
+memory_max = "128M"
+
+# Hot-swap configuration
+[hotswap]
+# Critical: SSH connections must not be dropped during upgrade
+transfer_fds = ["listening_sockets"]
+env_vars = ["SSHD_HOTSWAP=1"]
+shutdown_grace = 5
+
+# Example hot-swap scenarios:
+# 1. Security patch: graphctl swap sshd /usr/sbin/sshd-patched
+# 2. Version upgrade: graphctl swap sshd /opt/openssh-9.0/sbin/sshd
+# 3. Configuration change: Update config, then hot-swap to reload
