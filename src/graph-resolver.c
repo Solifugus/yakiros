@@ -30,6 +30,7 @@
 #include "component.h"
 #include "graph.h"
 #include "control.h"
+#include "cgroup.h"
 
 /* Global state */
 static int sigchld_pipe[2] = {-1, -1};
@@ -123,6 +124,9 @@ static void handle_inotify(int inotify_fd) {
     register_early_capabilities();
     load_components(GRAPH_DIR);
 
+    /* Validate reloaded graph (warn only, don't crash running system) */
+    validate_component_graph(1);
+
     /* Restore states for components that still exist */
     for (int i = 0; i < n_components; i++) {
         for (int j = 0; j < old_count; j++) {
@@ -193,6 +197,15 @@ int main(int argc, char *argv[]) {
     /* Initialize subsystems */
     capability_init();
 
+    /* Initialize cgroup v2 subsystem (only if PID 1) */
+    if (getpid() == 1) {
+        if (cgroup_init() < 0) {
+            LOG_ERR("failed to initialize cgroup subsystem");
+            emergency_shell();
+            return 1;
+        }
+    }
+
     /* Early boot: mount virtual filesystems (only if PID 1) */
     if (getpid() == 1) {
         mount_early_fs();
@@ -229,6 +242,13 @@ int main(int argc, char *argv[]) {
     register_early_capabilities();
     int loaded = load_components(GRAPH_DIR);
     LOG_INFO("loaded %d components", loaded);
+
+    /* Validate component graph for cycles */
+    if (validate_component_graph(0) < 0) {
+        LOG_ERR("component graph validation failed - cannot continue");
+        emergency_shell();
+        return 1;
+    }
 
     /* Set up epoll for event handling */
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
@@ -290,6 +310,7 @@ int main(int argc, char *argv[]) {
                     case COMP_STARTING:     state_str = "STARTING";  break;
                     case COMP_READY_WAIT:   state_str = "READY_WAIT"; break;
                     case COMP_ACTIVE:       state_str = "ACTIVE";    break;
+                    case COMP_DEGRADED:     state_str = "DEGRADED";  break;
                     case COMP_FAILED:       state_str = "FAILED";    break;
                     case COMP_ONESHOT_DONE: state_str = "DONE";      break;
                 }
@@ -315,6 +336,12 @@ int main(int argc, char *argv[]) {
 
         /* Check readiness for components waiting for readiness signals */
         check_all_readiness();
+
+        /* Check health for components with health checks enabled */
+        check_all_health();
+
+        /* Check for OOM events in component cgroups */
+        check_all_oom_events();
 
         for (int i = 0; i < nfds; i++) {
             int fd = events[i].data.fd;

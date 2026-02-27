@@ -407,6 +407,303 @@ TEST(graph_resolve_handles_ready_wait_state) {
     (void)changes;  /* Suppress unused variable warning */
 }
 
+/*
+ * Cycle Detection Tests
+ */
+
+TEST(cycle_detection_no_cycles) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create simple linear chain: A -> B -> C */
+    const char *a_req[] = {};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 0, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    const char *c_req[] = {"cap-b"};
+    const char *c_prov[] = {"cap-c"};
+    create_test_component(2, "comp-c", COMP_TYPE_SERVICE, c_req, 1, c_prov, 1);
+
+    n_components = 3;
+
+    /* Test cycle detection */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(0, result);  /* No cycles */
+    ASSERT_EQ(0, cycle_info.cycle_length);
+    ASSERT_TRUE(cycle_info.cycle_components == NULL);
+}
+
+TEST(cycle_detection_simple_cycle) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create simple cycle: A requires B, B requires A */
+    const char *a_req[] = {"cap-b"};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 1, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    n_components = 2;
+
+    /* Test cycle detection */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(1, result);  /* Cycle detected */
+    ASSERT_TRUE(cycle_info.cycle_length > 0);
+    ASSERT_TRUE(cycle_info.cycle_components != NULL);
+    ASSERT_TRUE(strlen(cycle_info.error_message) > 0);
+
+    free(cycle_info.cycle_components);
+}
+
+TEST(cycle_detection_complex_cycle) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create complex cycle: A -> B -> C -> D -> A */
+    const char *a_req[] = {"cap-d"};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 1, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    const char *c_req[] = {"cap-b"};
+    const char *c_prov[] = {"cap-c"};
+    create_test_component(2, "comp-c", COMP_TYPE_SERVICE, c_req, 1, c_prov, 1);
+
+    const char *d_req[] = {"cap-c"};
+    const char *d_prov[] = {"cap-d"};
+    create_test_component(3, "comp-d", COMP_TYPE_SERVICE, d_req, 1, d_prov, 1);
+
+    n_components = 4;
+
+    /* Test cycle detection */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(1, result);  /* Cycle detected */
+    ASSERT_EQ(5, cycle_info.cycle_length);  /* 4 components + closing component */
+    ASSERT_TRUE(cycle_info.cycle_components != NULL);
+
+    free(cycle_info.cycle_components);
+}
+
+TEST(cycle_detection_mixed_graph) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create graph with both cyclic and non-cyclic parts:
+     * - Linear chain: E -> F
+     * - Cycle: A -> B -> C -> A
+     * - Independent: D
+     */
+
+    /* Linear chain */
+    const char *e_req[] = {};
+    const char *e_prov[] = {"cap-e"};
+    create_test_component(0, "comp-e", COMP_TYPE_SERVICE, e_req, 0, e_prov, 1);
+
+    const char *f_req[] = {"cap-e"};
+    const char *f_prov[] = {"cap-f"};
+    create_test_component(1, "comp-f", COMP_TYPE_SERVICE, f_req, 1, f_prov, 1);
+
+    /* Cycle */
+    const char *a_req[] = {"cap-c"};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(2, "comp-a", COMP_TYPE_SERVICE, a_req, 1, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(3, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    const char *c_req[] = {"cap-b"};
+    const char *c_prov[] = {"cap-c"};
+    create_test_component(4, "comp-c", COMP_TYPE_SERVICE, c_req, 1, c_prov, 1);
+
+    /* Independent */
+    const char *d_req[] = {};
+    const char *d_prov[] = {"cap-d"};
+    create_test_component(5, "comp-d", COMP_TYPE_SERVICE, d_req, 0, d_prov, 1);
+
+    n_components = 6;
+
+    /* Test cycle detection - should find cycle despite non-cyclic components */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(1, result);  /* Cycle detected */
+    ASSERT_TRUE(cycle_info.cycle_length > 0);
+
+    free(cycle_info.cycle_components);
+}
+
+TEST(topological_sort_no_cycles) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create DAG: A -> B -> C, A -> D -> C */
+    const char *a_req[] = {};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 0, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    const char *c_req[] = {"cap-b", "cap-d"};
+    const char *c_prov[] = {"cap-c"};
+    create_test_component(2, "comp-c", COMP_TYPE_SERVICE, c_req, 2, c_prov, 1);
+
+    const char *d_req[] = {"cap-a"};
+    const char *d_prov[] = {"cap-d"};
+    create_test_component(3, "comp-d", COMP_TYPE_SERVICE, d_req, 1, d_prov, 1);
+
+    n_components = 4;
+
+    /* Test topological sort */
+    int sorted_components[MAX_COMPONENTS];
+    int result = graph_topological_sort(sorted_components, MAX_COMPONENTS);
+
+    ASSERT_EQ(0, result);  /* Success */
+
+    /* Verify ordering: comp-a should come before comp-b, comp-b and comp-d before comp-c */
+    int a_pos = -1, b_pos = -1, c_pos = -1, d_pos = -1;
+    for (int i = 0; i < n_components; i++) {
+        int comp_idx = sorted_components[i];
+        if (strcmp(components[comp_idx].name, "comp-a") == 0) a_pos = i;
+        if (strcmp(components[comp_idx].name, "comp-b") == 0) b_pos = i;
+        if (strcmp(components[comp_idx].name, "comp-c") == 0) c_pos = i;
+        if (strcmp(components[comp_idx].name, "comp-d") == 0) d_pos = i;
+    }
+
+    ASSERT_TRUE(a_pos < b_pos);  /* A before B */
+    ASSERT_TRUE(a_pos < d_pos);  /* A before D */
+    ASSERT_TRUE(b_pos < c_pos);  /* B before C */
+    ASSERT_TRUE(d_pos < c_pos);  /* D before C */
+}
+
+TEST(topological_sort_with_cycles) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create cycle: A -> B -> A */
+    const char *a_req[] = {"cap-b"};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 1, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    n_components = 2;
+
+    /* Test topological sort - should fail due to cycle */
+    int sorted_components[MAX_COMPONENTS];
+    int result = graph_topological_sort(sorted_components, MAX_COMPONENTS);
+
+    ASSERT_EQ(-1, result);  /* Failure due to cycles */
+}
+
+TEST(graph_analyze_metrics) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create test graph with known metrics */
+    const char *a_req[] = {};
+    const char *a_prov[] = {"cap-a", "cap-shared"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 0, a_prov, 2);
+
+    const char *b_req[] = {"cap-a", "cap-shared"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 2, b_prov, 1);
+
+    const char *c_req[] = {"cap-b"};
+    const char *c_prov[] = {"cap-c"};
+    create_test_component(2, "comp-c", COMP_TYPE_SERVICE, c_req, 1, c_prov, 1);
+
+    n_components = 3;
+
+    /* Analyze graph metrics */
+    graph_metrics_t metrics;
+    int result = graph_analyze_metrics(&metrics);
+
+    ASSERT_EQ(0, result);  /* Success */
+    ASSERT_EQ(3, metrics.total_components);
+    ASSERT_EQ(3, metrics.total_edges);  /* B->A (2 deps) + C->B (1 dep) = 3 total deps */
+    ASSERT_TRUE(metrics.average_dependencies_per_component > 0.0);
+}
+
+TEST(graph_validate_component_addition) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create valid graph */
+    const char *a_req[] = {};
+    const char *a_prov[] = {"cap-a"};
+    create_test_component(0, "comp-a", COMP_TYPE_SERVICE, a_req, 0, a_prov, 1);
+
+    const char *b_req[] = {"cap-a"};
+    const char *b_prov[] = {"cap-b"};
+    create_test_component(1, "comp-b", COMP_TYPE_SERVICE, b_req, 1, b_prov, 1);
+
+    n_components = 2;
+
+    /* Test validation of adding a valid component */
+    int result = graph_validate_component_addition("comp-c");
+    ASSERT_EQ(0, result);  /* Should succeed - no cycles in current graph */
+}
+
+TEST(cycle_detection_empty_graph) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Test cycle detection on empty graph */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(0, result);  /* No cycles in empty graph */
+    ASSERT_EQ(0, cycle_info.cycle_length);
+}
+
+TEST(cycle_detection_single_component_no_deps) {
+    /* Reset state */
+    n_components = 0;
+    capability_init();
+
+    /* Create single component with no dependencies */
+    const char *req[] = {};
+    const char *prov[] = {"standalone"};
+    create_test_component(0, "standalone", COMP_TYPE_SERVICE, req, 0, prov, 1);
+    n_components = 1;
+
+    /* Test cycle detection */
+    cycle_info_t cycle_info;
+    int result = graph_detect_cycles(&cycle_info);
+
+    ASSERT_EQ(0, result);  /* No cycles */
+}
+
 int main(void) {
     /* Initialize logging for tests */
     log_open();

@@ -9,6 +9,7 @@
 
 #include "toml.h"
 #include "capability.h"
+#include "cgroup.h"
 
 #define MAX_COMPONENTS 256
 #define GRAPH_DIR "/etc/graph.d"
@@ -31,8 +32,20 @@ void component_ready(int idx);
 /* Check readiness for all components in READY_WAIT state */
 void check_all_readiness(void);
 
+/* Check health for all components with health checks enabled */
+void check_all_health(void);
+
+/* Check OOM events for all components with cgroups */
+void check_all_oom_events(void);
+
+/* Hot-swap upgrade a component to new version */
+int component_upgrade(const char *component_name);
+
 /* Load all component declarations from directory */
 int load_components(const char *dir);
+
+/* Validate component graph for cycles and other issues */
+int validate_component_graph(int warn_only);
 
 /* Register early kernel capabilities */
 void register_early_capabilities(void);

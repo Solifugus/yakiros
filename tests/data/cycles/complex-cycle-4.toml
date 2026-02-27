@@ -1,0 +1,11 @@
+[component]
+name = "complex-cycle-4"
+binary = "/bin/sleep"
+args = ["300"]
+type = "service"
+
+[provides]
+capabilities = ["complex.service-4"]
+
+[requires]
+capabilities = ["complex.service-3"]

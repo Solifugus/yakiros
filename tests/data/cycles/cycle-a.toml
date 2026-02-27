@@ -1,0 +1,11 @@
+[component]
+name = "cycle-a"
+binary = "/bin/sleep"
+args = ["300"]
+type = "service"
+
+[provides]
+capabilities = ["service.cycle-a"]
+
+[requires]
+capabilities = ["service.cycle-b"]
