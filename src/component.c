@@ -11,6 +11,8 @@
 #include "handoff.h"
 #include "graph.h"
 #include "log.h"
+#include "checkpoint.h"
+#include "checkpoint-mgmt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -455,46 +457,82 @@ void register_early_capabilities(void) {
     }
 }
 
-/* Hot-swap upgrade a component to new version
- * Returns:
- *   0 = success (upgrade initiated)
- *  -1 = component not found
- *  -2 = component doesn't support hot-swap (handoff != "fd-passing")
- *  -3 = component not currently active
- *  -4 = other error
- */
-int component_upgrade(const char *component_name) {
-    /* Find component by name */
-    int idx = -1;
-    for (int i = 0; i < n_components; i++) {
-        if (strcmp(components[i].name, component_name) == 0) {
-            idx = i;
-            break;
-        }
-    }
-
-    if (idx == -1) {
-        LOG_ERR("upgrade: component '%s' not found", component_name);
+/* Helper function - remove directory recursively (internal use) */
+static int remove_directory_recursive(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) {
         return -1;
     }
 
-    component_t *comp = &components[idx];
+    struct dirent *entry;
+    int result = 0;
 
-    /* Check if component supports hot-swap */
-    if (comp->handoff != HANDOFF_FD_PASSING) {
-        LOG_ERR("upgrade: component '%s' does not support hot-swap (handoff=%d)",
-                component_name, comp->handoff);
-        return -2;
+    while ((entry = readdir(dir)) != NULL && result == 0) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+
+        struct stat st;
+        if (stat(full_path, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                result = remove_directory_recursive(full_path);
+            } else {
+                result = unlink(full_path);
+            }
+        }
     }
 
-    /* Check if component is currently active */
-    if (comp->state != COMP_ACTIVE) {
-        LOG_ERR("upgrade: component '%s' is not active (state=%d)",
-                component_name, comp->state);
-        return -3;
+    closedir(dir);
+
+    if (result == 0) {
+        result = rmdir(path);
     }
 
-    LOG_INFO("upgrade: initiating hot-swap for component '%s' (pid %d)",
+    return result;
+}
+
+/* Helper function - calculate directory size recursively */
+static size_t calculate_directory_size(const char *path) {
+    struct stat st;
+    size_t total_size = 0;
+
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+
+    if (S_ISREG(st.st_mode)) {
+        return st.st_size;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            return 0;
+        }
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+            total_size += calculate_directory_size(full_path);
+        }
+
+        closedir(dir);
+    }
+
+    return total_size;
+}
+
+/* Helper function to perform FD-passing hot-swap (existing functionality) */
+static int upgrade_with_fd_passing(const char *component_name, component_t *comp) {
+    LOG_INFO("upgrade: attempting FD-passing hot-swap for component '%s' (pid %d)",
              component_name, comp->pid);
 
     /* Step 1: Create socketpair for handoff communication */
@@ -580,7 +618,7 @@ int component_upgrade(const char *component_name) {
     int handoff_result = wait_handoff_complete(handoff_socks[0], 10000); /* 10 second timeout */
 
     if (handoff_result != 0) {
-        LOG_ERR("upgrade: handoff completion failed for '%s'", component_name);
+        LOG_ERR("upgrade: FD-passing handoff completion failed for '%s'", component_name);
         close(handoff_socks[0]);
         kill(new_pid, SIGTERM); /* Clean up new process */
         return -4;
@@ -595,7 +633,7 @@ int component_upgrade(const char *component_name) {
     comp->state = (comp->readiness_method == READINESS_NONE) ? COMP_ACTIVE : COMP_READY_WAIT;
     comp->ready_wait_start = time(NULL);
 
-    LOG_INFO("upgrade: transitioned component '%s' from pid %d to pid %d",
+    LOG_INFO("upgrade: transitioned component '%s' from pid %d to pid %d (FD-passing)",
              component_name, old_pid, new_pid);
 
     /* Old process should exit cleanly after sending handoff complete */
@@ -606,11 +644,445 @@ int component_upgrade(const char *component_name) {
         kill(old_pid, SIGTERM);
     }
 
-    /* If using readiness protocol, capabilities will be re-registered when new process signals ready */
-    if (comp->readiness_method == READINESS_NONE) {
-        LOG_INFO("upgrade: hot-swap complete for '%s' - service immediately active", component_name);
+    return 0; /* Success */
+}
+
+/* Helper function to perform checkpoint-based hot-swap */
+static int upgrade_with_checkpoint(const char *component_name, component_t *comp) {
+    LOG_INFO("upgrade: attempting checkpoint hot-swap for component '%s' (pid %d)",
+             component_name, comp->pid);
+
+    /* Create checkpoint directory */
+    char checkpoint_id[CHECKPOINT_ID_MAX_LEN];
+    char checkpoint_path[MAX_CHECKPOINT_PATH];
+
+    if (checkpoint_create_directory(component_name, 0, /* temporary storage */
+                                   checkpoint_id, sizeof(checkpoint_id),
+                                   checkpoint_path, sizeof(checkpoint_path)) != 0) {
+        LOG_ERR("upgrade: failed to create checkpoint directory for '%s'", component_name);
+        return -4;
+    }
+
+    LOG_INFO("upgrade: created checkpoint directory %s", checkpoint_path);
+
+    /* Attempt CRIU checkpoint of the old process */
+    int checkpoint_result = criu_checkpoint_process(comp->pid, checkpoint_path, 1); /* leave running */
+
+    if (checkpoint_result != CHECKPOINT_SUCCESS) {
+        LOG_WARN("upgrade: checkpoint failed for '%s': %s",
+                component_name, checkpoint_error_string(checkpoint_result));
+        /* Clean up failed checkpoint directory */
+        remove_directory_recursive(checkpoint_path);
+        return -4; /* Will trigger fallback in main function */
+    }
+
+    LOG_INFO("upgrade: successfully checkpointed process %d for '%s'", comp->pid, component_name);
+
+    /* Prepare and save metadata */
+    checkpoint_metadata_t metadata;
+    memset(&metadata, 0, sizeof(metadata));
+
+    strncpy(metadata.component_name, component_name, sizeof(metadata.component_name) - 1);
+    metadata.original_pid = comp->pid;
+    metadata.timestamp = time(NULL);
+    metadata.leave_running = 1;
+
+    /* Get CRIU version info */
+    criu_get_version(&metadata.criu_version);
+
+    /* Build capabilities string */
+    metadata.capabilities[0] = '\0';
+    for (int i = 0; i < comp->n_provides; i++) {
+        if (i > 0) strncat(metadata.capabilities, ",", sizeof(metadata.capabilities) - strlen(metadata.capabilities) - 1);
+        strncat(metadata.capabilities, comp->provides[i], sizeof(metadata.capabilities) - strlen(metadata.capabilities) - 1);
+    }
+
+    /* Calculate checkpoint size */
+    metadata.image_size = calculate_directory_size(checkpoint_path);
+
+    /* Save metadata */
+    if (checkpoint_save_metadata(checkpoint_path, &metadata) != 0) {
+        LOG_WARN("upgrade: failed to save checkpoint metadata for '%s'", component_name);
+        /* Continue anyway - checkpoint might still work */
+    }
+
+    /* Now attempt to restore the process */
+    pid_t new_pid = criu_restore_process(checkpoint_path);
+
+    if (new_pid < 0) {
+        LOG_ERR("upgrade: checkpoint restore failed for '%s': %s",
+                component_name, checkpoint_error_string(new_pid));
+        /* Clean up failed checkpoint */
+        remove_directory_recursive(checkpoint_path);
+        return -4; /* Will trigger fallback */
+    }
+
+    LOG_INFO("upgrade: successfully restored process as pid %d for '%s'", new_pid, component_name);
+
+    /* Update component record with new PID */
+    pid_t old_pid = comp->pid;
+    comp->pid = new_pid;
+    comp->state = (comp->readiness_method == READINESS_NONE) ? COMP_ACTIVE : COMP_READY_WAIT;
+    comp->ready_wait_start = time(NULL);
+
+    LOG_INFO("upgrade: transitioned component '%s' from pid %d to pid %d (checkpoint)",
+             component_name, old_pid, new_pid);
+
+    /* Terminate the old process since we left it running during checkpoint */
+    if (kill(old_pid, SIGTERM) != 0) {
+        LOG_WARN("upgrade: failed to terminate old process %d: %s", old_pid, strerror(errno));
+        /* Try harder */
+        sleep(1);
+        kill(old_pid, SIGKILL);
+    }
+
+    /* Clean up the temporary checkpoint (successful restore) */
+    if (remove_directory_recursive(checkpoint_path) != 0) {
+        LOG_WARN("upgrade: failed to clean up temporary checkpoint %s", checkpoint_path);
+        /* Not critical - continue */
+    }
+
+    return 0; /* Success */
+}
+
+/* Helper function to perform standard restart (fallback) */
+static int upgrade_with_restart(const char *component_name, component_t *comp) {
+    LOG_WARN("upgrade: falling back to standard restart for component '%s' (brief downtime)",
+             component_name);
+
+    /* Withdraw capabilities first to signal unavailability */
+    for (int i = 0; i < comp->n_provides; i++) {
+        capability_withdraw(comp->provides[i]);
+    }
+
+    /* Terminate old process */
+    pid_t old_pid = comp->pid;
+    if (kill(old_pid, SIGTERM) != 0) {
+        LOG_ERR("upgrade: failed to terminate old process %d: %s", old_pid, strerror(errno));
+        return -4;
+    }
+
+    /* Wait for process to exit (with timeout) */
+    int status;
+    int wait_time = 0;
+    const int max_wait = 10; /* seconds */
+
+    while (wait_time < max_wait) {
+        pid_t result = waitpid(old_pid, &status, WNOHANG);
+        if (result == old_pid) {
+            break; /* Process exited */
+        } else if (result == -1) {
+            if (errno == ECHILD) {
+                break; /* Process already reaped */
+            }
+        }
+
+        sleep(1);
+        wait_time++;
+    }
+
+    if (wait_time >= max_wait) {
+        LOG_WARN("upgrade: old process %d did not exit, killing", old_pid);
+        kill(old_pid, SIGKILL);
+        waitpid(old_pid, NULL, 0); /* Clean up zombie */
+    }
+
+    /* Reset component state and restart */
+    comp->pid = 0;
+    comp->state = COMP_INACTIVE;
+    comp->restart_count = 0;
+
+    LOG_INFO("upgrade: restarting component '%s' after terminating pid %d", component_name, old_pid);
+
+    /* Find the component index and restart it */
+    int idx = comp - components;
+    return component_start(idx);
+}
+
+/* Hot-swap upgrade a component to new version with three-level fallback
+ *
+ * This function implements a three-level fallback strategy for hot-swap:
+ *
+ * Level 1: CRIU checkpoint/restore (full state preservation)
+ * Level 2: FD-passing hot-swap (zero-downtime, state loss)
+ * Level 3: Standard restart (brief downtime, full state loss)
+ *
+ * The handoff type in the component configuration determines which level
+ * to attempt first, with automatic fallback if that level fails.
+ *
+ * Returns:
+ *   0 = success (upgrade completed)
+ *  -1 = component not found
+ *  -2 = component doesn't support any hot-swap method
+ *  -3 = component not currently active
+ *  -4 = all upgrade methods failed
+ */
+int component_upgrade(const char *component_name) {
+    /* Find component by name */
+    int idx = -1;
+    for (int i = 0; i < n_components; i++) {
+        if (strcmp(components[i].name, component_name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx == -1) {
+        LOG_ERR("upgrade: component '%s' not found", component_name);
+        return -1;
+    }
+
+    component_t *comp = &components[idx];
+
+    /* Check if component is currently active */
+    if (comp->state != COMP_ACTIVE) {
+        LOG_ERR("upgrade: component '%s' is not active (state=%d)",
+                component_name, comp->state);
+        return -3;
+    }
+
+    LOG_INFO("upgrade: initiating upgrade for component '%s' (handoff=%d, pid=%d)",
+             component_name, comp->handoff, comp->pid);
+
+    int result = -4; /* Default to failure */
+
+    /* Three-level fallback strategy */
+    switch (comp->handoff) {
+        case HANDOFF_CHECKPOINT:
+            /* Level 1: Attempt CRIU checkpoint/restore */
+            if (criu_is_supported() == CHECKPOINT_SUCCESS) {
+                result = upgrade_with_checkpoint(component_name, comp);
+                if (result == 0) {
+                    LOG_INFO("upgrade: checkpoint hot-swap successful for '%s'", component_name);
+                    break;
+                }
+                LOG_WARN("upgrade: checkpoint failed for '%s', falling back to FD-passing", component_name);
+            } else {
+                LOG_WARN("upgrade: CRIU not supported, falling back to FD-passing for '%s'", component_name);
+            }
+            __attribute__((fallthrough));
+            /* Fallthrough to Level 2 */
+
+        case HANDOFF_FD_PASSING:
+            /* Level 2: Attempt FD-passing hot-swap */
+            result = upgrade_with_fd_passing(component_name, comp);
+            if (result == 0) {
+                LOG_INFO("upgrade: FD-passing hot-swap successful for '%s'", component_name);
+                break;
+            }
+            LOG_WARN("upgrade: FD-passing failed for '%s', falling back to restart", component_name);
+            __attribute__((fallthrough));
+            /* Fallthrough to Level 3 */
+
+        case HANDOFF_NONE:
+        default:
+            /* Level 3: Standard restart (always works) */
+            result = upgrade_with_restart(component_name, comp);
+            if (result == 0) {
+                LOG_INFO("upgrade: restart successful for '%s'", component_name);
+            } else {
+                LOG_ERR("upgrade: all upgrade methods failed for '%s'", component_name);
+            }
+            break;
+    }
+
+    /* Handle post-upgrade readiness if successful */
+    if (result == 0) {
+        if (comp->readiness_method == READINESS_NONE) {
+            /* Re-register capabilities immediately */
+            int idx = comp - components;
+            for (int i = 0; i < comp->n_provides; i++) {
+                capability_register(comp->provides[i], idx);
+            }
+            LOG_INFO("upgrade: component '%s' immediately active", component_name);
+        } else {
+            LOG_INFO("upgrade: component '%s' waiting for readiness signal", component_name);
+        }
+    }
+
+    return result;
+}
+
+/* Checkpoint a component manually for backup or migration purposes */
+int component_checkpoint(const char *component_name) {
+    /* Find component by name */
+    int idx = -1;
+    for (int i = 0; i < n_components; i++) {
+        if (strcmp(components[i].name, component_name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx == -1) {
+        LOG_ERR("checkpoint: component '%s' not found", component_name);
+        return -1;
+    }
+
+    component_t *comp = &components[idx];
+
+    /* Check if component is currently active */
+    if (comp->state != COMP_ACTIVE) {
+        LOG_ERR("checkpoint: component '%s' is not active (state=%d)",
+                component_name, comp->state);
+        return -3;
+    }
+
+    /* Check CRIU support */
+    if (criu_is_supported() != CHECKPOINT_SUCCESS) {
+        LOG_ERR("checkpoint: CRIU not supported on this system");
+        return -2;
+    }
+
+    LOG_INFO("checkpoint: creating checkpoint for component '%s' (pid %d)",
+             component_name, comp->pid);
+
+    /* Create checkpoint directory */
+    char checkpoint_id[CHECKPOINT_ID_MAX_LEN];
+    char checkpoint_path[MAX_CHECKPOINT_PATH];
+
+    if (checkpoint_create_directory(component_name, 1, /* persistent storage */
+                                   checkpoint_id, sizeof(checkpoint_id),
+                                   checkpoint_path, sizeof(checkpoint_path)) != 0) {
+        LOG_ERR("checkpoint: failed to create checkpoint directory for '%s'", component_name);
+        return -4;
+    }
+
+    /* Perform checkpoint (leave process running) */
+    int checkpoint_result = criu_checkpoint_process(comp->pid, checkpoint_path, 1);
+
+    if (checkpoint_result != CHECKPOINT_SUCCESS) {
+        LOG_ERR("checkpoint: failed to checkpoint '%s': %s",
+                component_name, checkpoint_error_string(checkpoint_result));
+        /* Clean up failed checkpoint directory */
+        remove_directory_recursive(checkpoint_path);
+        return -4;
+    }
+
+    /* Prepare and save metadata */
+    checkpoint_metadata_t metadata;
+    memset(&metadata, 0, sizeof(metadata));
+
+    strncpy(metadata.component_name, component_name, sizeof(metadata.component_name) - 1);
+    metadata.original_pid = comp->pid;
+    metadata.timestamp = time(NULL);
+    metadata.leave_running = 1;
+    metadata.image_size = calculate_directory_size(checkpoint_path);
+
+    /* Get CRIU version info */
+    criu_get_version(&metadata.criu_version);
+
+    /* Build capabilities string */
+    metadata.capabilities[0] = '\0';
+    for (int i = 0; i < comp->n_provides; i++) {
+        if (i > 0) strncat(metadata.capabilities, ",", sizeof(metadata.capabilities) - strlen(metadata.capabilities) - 1);
+        strncat(metadata.capabilities, comp->provides[i], sizeof(metadata.capabilities) - strlen(metadata.capabilities) - 1);
+    }
+
+    /* Save metadata */
+    if (checkpoint_save_metadata(checkpoint_path, &metadata) != 0) {
+        LOG_WARN("checkpoint: failed to save metadata for '%s'", component_name);
+    }
+
+    LOG_INFO("checkpoint: successfully created checkpoint %s for component '%s'",
+             checkpoint_id, component_name);
+
+    return 0; /* Success */
+}
+
+/* Restore a component from a specific checkpoint */
+int component_restore(const char *component_name, const char *checkpoint_id) {
+    /* Find component by name */
+    int idx = -1;
+    for (int i = 0; i < n_components; i++) {
+        if (strcmp(components[i].name, component_name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx == -1) {
+        LOG_ERR("restore: component '%s' not found", component_name);
+        return -1;
+    }
+
+    component_t *comp = &components[idx];
+
+    /* Check CRIU support */
+    if (criu_is_supported() != CHECKPOINT_SUCCESS) {
+        LOG_ERR("restore: CRIU not supported on this system");
+        return -2;
+    }
+
+    char checkpoint_path[MAX_CHECKPOINT_PATH];
+
+    char actual_checkpoint_id[CHECKPOINT_ID_MAX_LEN];
+
+    if (checkpoint_id) {
+        /* Use specific checkpoint ID */
+        strncpy(actual_checkpoint_id, checkpoint_id, sizeof(actual_checkpoint_id) - 1);
+        actual_checkpoint_id[sizeof(actual_checkpoint_id) - 1] = '\0';
+        snprintf(checkpoint_path, sizeof(checkpoint_path), "%s/%s/%s",
+                CHECKPOINT_VAR_DIR, component_name, actual_checkpoint_id);
     } else {
-        LOG_INFO("upgrade: hot-swap complete for '%s' - waiting for readiness signal", component_name);
+        /* Find latest checkpoint */
+        if (checkpoint_find_latest(component_name, 1, /* persistent storage */
+                                  actual_checkpoint_id, sizeof(actual_checkpoint_id),
+                                  checkpoint_path, sizeof(checkpoint_path)) != 0) {
+            LOG_ERR("restore: no checkpoints found for component '%s'", component_name);
+            return -3;
+        }
+    }
+
+    LOG_INFO("restore: restoring component '%s' from checkpoint %s",
+             component_name, actual_checkpoint_id);
+
+    /* Terminate current process if running */
+    if (comp->state == COMP_ACTIVE && comp->pid > 0) {
+        LOG_INFO("restore: terminating current process %d for '%s'", comp->pid, component_name);
+
+        /* Withdraw capabilities first */
+        for (int i = 0; i < comp->n_provides; i++) {
+            capability_withdraw(comp->provides[i]);
+        }
+
+        if (kill(comp->pid, SIGTERM) == 0) {
+            /* Wait for process to exit */
+            int wait_time = 0;
+            const int max_wait = 10;
+            while (wait_time < max_wait && kill(comp->pid, 0) == 0) {
+                sleep(1);
+                wait_time++;
+            }
+            if (wait_time >= max_wait) {
+                kill(comp->pid, SIGKILL);
+            }
+        }
+    }
+
+    /* Perform restore */
+    pid_t new_pid = criu_restore_process(checkpoint_path);
+
+    if (new_pid < 0) {
+        LOG_ERR("restore: failed to restore '%s' from checkpoint %s: %s",
+                component_name, actual_checkpoint_id, checkpoint_error_string(new_pid));
+        return -4;
+    }
+
+    /* Update component record */
+    comp->pid = new_pid;
+    comp->state = (comp->readiness_method == READINESS_NONE) ? COMP_ACTIVE : COMP_READY_WAIT;
+    comp->ready_wait_start = time(NULL);
+
+    LOG_INFO("restore: successfully restored component '%s' as pid %d from checkpoint %s",
+             component_name, new_pid, actual_checkpoint_id);
+
+    /* Re-register capabilities if no readiness protocol */
+    if (comp->readiness_method == READINESS_NONE) {
+        int idx = comp - components;
+        for (int i = 0; i < comp->n_provides; i++) {
+            capability_register(comp->provides[i], idx);
+        }
     }
 
     return 0; /* Success */

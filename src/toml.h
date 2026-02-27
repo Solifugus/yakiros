@@ -33,6 +33,7 @@ typedef enum {
     COMP_STARTING,      /* process launching */
     COMP_READY_WAIT,    /* process launched, waiting for readiness signal */
     COMP_ACTIVE,        /* running and providing capabilities */
+    COMP_DEGRADED,      /* running but health checks failing */
     COMP_FAILED,        /* crashed, readiness timeout, or other failure */
     COMP_ONESHOT_DONE,  /* oneshot completed successfully */
 } comp_state_t;
@@ -82,8 +83,16 @@ typedef struct {
 
     /* Lifecycle management */
     int      reload_signal;
-    char     health_check[MAX_PATH];
-    int      health_interval;
+    char     health_check[MAX_PATH];        /* path to health check script */
+    int      health_interval;               /* health check interval in seconds */
+    int      health_timeout;                /* health check timeout in seconds (default 10) */
+    int      health_fail_threshold;         /* failures before entering DEGRADED (default 3) */
+    int      health_restart_threshold;      /* failures before restarting (default 5) */
+
+    /* Health check status */
+    int      health_consecutive_failures;   /* current consecutive failure count */
+    time_t   last_health_check;            /* timestamp of last health check */
+    int      last_health_result;           /* 0=success, 1=failure, 2=timeout */
 
     /* Readiness protocol */
     readiness_method_t readiness_method;       /* which readiness method to use */
@@ -93,6 +102,27 @@ typedef struct {
     int      readiness_timeout;                /* timeout in seconds (default 30) */
     int      readiness_interval;               /* check interval for health checks */
     time_t   ready_wait_start;                 /* when COMP_READY_WAIT state started */
+
+    /* cgroup resource limits */
+    char     cgroup_path[MAX_PATH];            /* cgroup path under /sys/fs/cgroup/graph/ */
+    char     memory_max[32];                   /* memory.max limit (e.g., "64M") */
+    char     memory_high[32];                  /* memory.high limit (e.g., "48M") */
+    int      cpu_weight;                       /* cpu.weight (1-10000, default 100) */
+    char     cpu_max[32];                      /* cpu.max limit (e.g., "50000 100000") */
+    int      io_weight;                        /* io.weight (1-10000, default 100) */
+    int      pids_max;                         /* pids.max limit (default 0 = no limit) */
+
+    /* namespace isolation */
+    char     isolation_namespaces[256];        /* comma-separated list: "mount,pid,net,uts,ipc" */
+    char     isolation_root[MAX_PATH];         /* chroot/pivot_root target (default "/") */
+    char     isolation_hostname[MAX_NAME];     /* hostname for UTS namespace */
+
+    /* checkpoint configuration */
+    int      checkpoint_enabled;               /* enable checkpoint support (default 0) */
+    char     checkpoint_preserve_fds[256];     /* comma-separated list of FD types to preserve */
+    int      checkpoint_leave_running;         /* leave process running during checkpoint (default 1) */
+    int      checkpoint_memory_estimate;       /* expected RAM usage in MB for planning */
+    int      checkpoint_max_age;               /* cleanup checkpoints older than this (hours) */
 } component_t;
 
 /* Parse a component TOML file, populate a component_t structure */

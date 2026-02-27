@@ -38,8 +38,14 @@ void check_all_health(void);
 /* Check OOM events for all components with cgroups */
 void check_all_oom_events(void);
 
-/* Hot-swap upgrade a component to new version */
+/* Hot-swap upgrade a component to new version with three-level fallback */
 int component_upgrade(const char *component_name);
+
+/* Create checkpoint of a running component for backup/migration */
+int component_checkpoint(const char *component_name);
+
+/* Restore component from checkpoint (latest if checkpoint_id is NULL) */
+int component_restore(const char *component_name, const char *checkpoint_id);
 
 /* Load all component declarations from directory */
 int load_components(const char *dir);

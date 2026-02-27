@@ -23,7 +23,8 @@ DESTDIR ?= /
 
 # Source files for modular build
 RESOLVER_SRCS = src/graph-resolver.c src/log.c src/toml.c src/capability.c \
-                src/component.c src/graph.c src/control.c src/handoff.c src/cgroup.c
+                src/component.c src/graph.c src/control.c src/handoff.c src/cgroup.c \
+                src/checkpoint.c src/checkpoint-mgmt.c
 RESOLVER_OBJS = $(RESOLVER_SRCS:.c=.o)
 
 BINS = graph-resolver graphctl
@@ -40,9 +41,9 @@ graphctl: src/graphctl.c
 # Test executables
 UNIT_TESTS = tests/unit/test_toml tests/unit/test_toml_readiness tests/unit/test_capability tests/unit/test_component \
              tests/unit/test_graph tests/unit/test_log tests/unit/test_control tests/unit/test_handoff tests/unit/test_isolation \
-             tests/unit/test_cycle_detection
+             tests/unit/test_cycle_detection tests/unit/test_checkpoint
 INTEGRATION_TESTS = tests/integration/test_full_system tests/integration/test_hotswap tests/integration/test_isolation_integration \
-                    tests/integration/test_cycle_detection_integration
+                    tests/integration/test_cycle_detection_integration tests/integration/test_checkpoint_integration
 ALL_TESTS = $(UNIT_TESTS) $(INTEGRATION_TESTS) tests/test_framework_test
 
 # Build all tests
@@ -58,10 +59,10 @@ tests/unit/test_toml_readiness: tests/unit/test_toml_readiness.c src/toml.c src/
 tests/unit/test_capability: tests/unit/test_capability.c src/capability.c src/log.c
 	$(CC) $(CFLAGS) -Itests -o $@ $^
 
-tests/unit/test_component: tests/unit/test_component.c src/component.c src/capability.c src/toml.c src/handoff.c src/cgroup.c src/graph.c src/log.c
+tests/unit/test_component: tests/unit/test_component.c src/component.c src/capability.c src/toml.c src/handoff.c src/cgroup.c src/graph.c src/checkpoint.c src/checkpoint-mgmt.c src/log.c
 	$(CC) $(CFLAGS) -Itests -o $@ $^
 
-tests/unit/test_graph: tests/unit/test_graph.c src/graph.c src/component.c src/capability.c src/toml.c src/handoff.c src/cgroup.c src/log.c
+tests/unit/test_graph: tests/unit/test_graph.c src/graph.c src/component.c src/capability.c src/toml.c src/handoff.c src/cgroup.c src/checkpoint.c src/checkpoint-mgmt.c src/log.c
 	$(CC) $(CFLAGS) -Itests -o $@ $^
 
 tests/unit/test_log: tests/unit/test_log.c src/log.c
@@ -90,6 +91,12 @@ tests/unit/test_cycle_detection: tests/unit/test_cycle_detection.c src/graph.c s
 	$(CC) $(CFLAGS) -Itests -o $@ $^
 
 tests/integration/test_cycle_detection_integration: tests/integration/test_cycle_detection_integration.c src/component.c src/capability.c src/graph.c src/toml.c src/handoff.c src/cgroup.c src/log.c
+	$(CC) $(CFLAGS) -Itests -o $@ $^
+
+tests/unit/test_checkpoint: tests/unit/test_checkpoint.c src/checkpoint.c src/checkpoint-mgmt.c src/log.c
+	$(CC) $(CFLAGS) -Itests -o $@ $^
+
+tests/integration/test_checkpoint_integration: tests/integration/test_checkpoint_integration.c src/component.c src/capability.c src/checkpoint.c src/checkpoint-mgmt.c src/control.c src/toml.c src/handoff.c src/cgroup.c src/graph.c src/log.c
 	$(CC) $(CFLAGS) -Itests -o $@ $^
 
 # Test framework test

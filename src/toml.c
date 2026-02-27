@@ -26,6 +26,7 @@ typedef enum {
     SECTION_LIFECYCLE,
     SECTION_RESOURCES,
     SECTION_ISOLATION,
+    SECTION_CHECKPOINT,
 } toml_section_t;
 
 /* Helper function to trim whitespace */
@@ -45,6 +46,7 @@ static toml_section_t parse_section(const char *line) {
     if (strstr(line, "[lifecycle]"))  return SECTION_LIFECYCLE;
     if (strstr(line, "[resources]"))  return SECTION_RESOURCES;
     if (strstr(line, "[isolation]"))  return SECTION_ISOLATION;
+    if (strstr(line, "[checkpoint]")) return SECTION_CHECKPOINT;
     return SECTION_NONE; /* unknown section, skip */
 }
 
@@ -120,6 +122,12 @@ int parse_component(const char *path, component_t *comp) {
     comp->handoff = HANDOFF_NONE;
     comp->reload_signal = 0;
     comp->health_interval = 0;
+    comp->health_timeout = 10;                /* default 10 second timeout */
+    comp->health_fail_threshold = 3;          /* default 3 failures before DEGRADED */
+    comp->health_restart_threshold = 5;       /* default 5 failures before restart */
+    comp->health_consecutive_failures = 0;
+    comp->last_health_check = 0;
+    comp->last_health_result = 0;
     comp->pid = -1;
     snprintf(comp->config_path, MAX_PATH, "%s", path);
 
@@ -129,6 +137,27 @@ int parse_component(const char *path, component_t *comp) {
     comp->readiness_interval = 5;             /* default 5 second health check interval */
     comp->readiness_signal = 0;               /* no signal */
     comp->ready_wait_start = 0;
+
+    /* Initialize cgroup resource limits defaults */
+    memset(comp->cgroup_path, 0, MAX_PATH);
+    memset(comp->memory_max, 0, 32);
+    memset(comp->memory_high, 0, 32);
+    memset(comp->cpu_max, 0, 32);
+    comp->cpu_weight = 0;                     /* 0 = no weight specified, use default */
+    comp->io_weight = 0;                      /* 0 = no weight specified, use default */
+    comp->pids_max = 0;                       /* 0 = no limit */
+
+    /* Initialize namespace isolation defaults */
+    memset(comp->isolation_namespaces, 0, 256);
+    strncpy(comp->isolation_root, "/", MAX_PATH - 1);  /* default to root filesystem */
+    memset(comp->isolation_hostname, 0, MAX_NAME);
+
+    /* Initialize checkpoint configuration defaults */
+    comp->checkpoint_enabled = 0;                      /* disabled by default */
+    memset(comp->checkpoint_preserve_fds, 0, 256);
+    comp->checkpoint_leave_running = 1;                /* default: leave running during checkpoint */
+    comp->checkpoint_memory_estimate = 0;              /* no estimate by default */
+    comp->checkpoint_max_age = 24;                     /* default: cleanup after 24 hours */
 
     char line[MAX_LINE];
     toml_section_t section = SECTION_NONE;
@@ -197,6 +226,24 @@ int parse_component(const char *path, component_t *comp) {
                 strncpy(comp->health_check, val, MAX_PATH - 1);
             else if (strcmp(key, "health_interval") == 0)
                 comp->health_interval = atoi(val);
+            else if (strcmp(key, "health_timeout") == 0) {
+                comp->health_timeout = atoi(val);
+                if (comp->health_timeout <= 0) {
+                    comp->health_timeout = 10; /* default */
+                }
+            }
+            else if (strcmp(key, "health_fail_threshold") == 0) {
+                comp->health_fail_threshold = atoi(val);
+                if (comp->health_fail_threshold <= 0) {
+                    comp->health_fail_threshold = 3; /* default */
+                }
+            }
+            else if (strcmp(key, "health_restart_threshold") == 0) {
+                comp->health_restart_threshold = atoi(val);
+                if (comp->health_restart_threshold <= 0) {
+                    comp->health_restart_threshold = 5; /* default */
+                }
+            }
             /* Readiness protocol configuration */
             else if (strcmp(key, "readiness_file") == 0) {
                 strncpy(comp->readiness_file, val, MAX_PATH - 1);
@@ -223,6 +270,67 @@ int parse_component(const char *path, component_t *comp) {
                 if (comp->readiness_interval <= 0) {
                     comp->readiness_interval = 5; /* default */
                 }
+            }
+            break;
+
+        case SECTION_RESOURCES:
+            if (strcmp(key, "cgroup") == 0) {
+                strncpy(comp->cgroup_path, val, MAX_PATH - 1);
+            }
+            else if (strcmp(key, "memory_max") == 0) {
+                strncpy(comp->memory_max, val, 31);
+            }
+            else if (strcmp(key, "memory_high") == 0) {
+                strncpy(comp->memory_high, val, 31);
+            }
+            else if (strcmp(key, "cpu_weight") == 0) {
+                comp->cpu_weight = atoi(val);
+                if (comp->cpu_weight < 1) comp->cpu_weight = 1;
+                if (comp->cpu_weight > 10000) comp->cpu_weight = 10000;
+            }
+            else if (strcmp(key, "cpu_max") == 0) {
+                strncpy(comp->cpu_max, val, 31);
+            }
+            else if (strcmp(key, "io_weight") == 0) {
+                comp->io_weight = atoi(val);
+                if (comp->io_weight < 1) comp->io_weight = 1;
+                if (comp->io_weight > 10000) comp->io_weight = 10000;
+            }
+            else if (strcmp(key, "pids_max") == 0) {
+                comp->pids_max = atoi(val);
+                if (comp->pids_max < 0) comp->pids_max = 0;
+            }
+            break;
+
+        case SECTION_ISOLATION:
+            if (strcmp(key, "namespaces") == 0) {
+                strncpy(comp->isolation_namespaces, val, 255);
+            }
+            else if (strcmp(key, "root") == 0) {
+                strncpy(comp->isolation_root, val, MAX_PATH - 1);
+            }
+            else if (strcmp(key, "hostname") == 0) {
+                strncpy(comp->isolation_hostname, val, MAX_NAME - 1);
+            }
+            break;
+
+        case SECTION_CHECKPOINT:
+            if (strcmp(key, "enabled") == 0) {
+                comp->checkpoint_enabled = (strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
+            }
+            else if (strcmp(key, "preserve_fds") == 0) {
+                strncpy(comp->checkpoint_preserve_fds, val, 255);
+            }
+            else if (strcmp(key, "leave_running") == 0) {
+                comp->checkpoint_leave_running = (strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
+            }
+            else if (strcmp(key, "memory_estimate") == 0) {
+                comp->checkpoint_memory_estimate = atoi(val);
+                if (comp->checkpoint_memory_estimate < 0) comp->checkpoint_memory_estimate = 0;
+            }
+            else if (strcmp(key, "max_age") == 0) {
+                comp->checkpoint_max_age = atoi(val);
+                if (comp->checkpoint_max_age < 1) comp->checkpoint_max_age = 24; /* default 24 hours */
             }
             break;
 

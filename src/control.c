@@ -7,6 +7,8 @@
 #include "capability.h"
 #include "graph.h"
 #include "log.h"
+#include "checkpoint.h"
+#include "checkpoint-mgmt.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -733,6 +735,203 @@ void handle_control_command(int client_fd) {
             }
         }
 
+    } else if (strncmp(cmd, "checkpoint", 10) == 0) {
+        /* Create checkpoint of a component */
+        const char *component_name = NULL;
+        if (strlen(cmd) > 11) {
+            component_name = cmd + 11; /* Skip "checkpoint " */
+        }
+
+        if (!component_name || strlen(component_name) == 0) {
+            rlen = snprintf(response, sizeof(response),
+                            "Error: checkpoint command requires component name\n"
+                            "Usage: checkpoint <component_name>\n");
+        } else {
+            int result = component_checkpoint(component_name);
+            if (result == 0) {
+                rlen = snprintf(response, sizeof(response),
+                                "Checkpoint created successfully for component '%s'\n", component_name);
+            } else if (result == -1) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: component '%s' not found\n", component_name);
+            } else if (result == -2) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: CRIU not supported on this system\n");
+            } else if (result == -3) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: component '%s' is not currently active\n", component_name);
+            } else {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: checkpoint failed for component '%s' (error code %d)\n", component_name, result);
+            }
+        }
+
+    } else if (strncmp(cmd, "restore", 7) == 0) {
+        /* Restore component from checkpoint */
+        char component_name[128] = {0};
+        char checkpoint_id[64] = {0};
+
+        /* Parse "restore <component> [checkpoint_id]" */
+        int args_parsed = sscanf(cmd, "restore %127s %63s", component_name, checkpoint_id);
+
+        if (args_parsed < 1) {
+            rlen = snprintf(response, sizeof(response),
+                            "Error: restore command requires component name\n"
+                            "Usage: restore <component_name> [checkpoint_id]\n");
+        } else {
+            const char *checkpoint_ptr = (args_parsed >= 2 && strlen(checkpoint_id) > 0) ? checkpoint_id : NULL;
+            int result = component_restore(component_name, checkpoint_ptr);
+
+            if (result == 0) {
+                if (checkpoint_ptr) {
+                    rlen = snprintf(response, sizeof(response),
+                                    "Component '%s' restored successfully from checkpoint %s\n",
+                                    component_name, checkpoint_ptr);
+                } else {
+                    rlen = snprintf(response, sizeof(response),
+                                    "Component '%s' restored successfully from latest checkpoint\n",
+                                    component_name);
+                }
+            } else if (result == -1) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: component '%s' not found\n", component_name);
+            } else if (result == -2) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: CRIU not supported on this system\n");
+            } else if (result == -3) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: no checkpoints found for component '%s'\n", component_name);
+            } else {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: restore failed for component '%s' (error code %d)\n", component_name, result);
+            }
+        }
+
+    } else if (strncmp(cmd, "checkpoint-list", 15) == 0) {
+        /* List available checkpoints */
+        const char *component_name = NULL;
+        if (strlen(cmd) > 16) {
+            component_name = cmd + 16; /* Skip "checkpoint-list " */
+            /* Trim leading/trailing whitespace */
+            while (*component_name == ' ') component_name++;
+            if (strlen(component_name) == 0) component_name = NULL;
+        }
+
+        checkpoint_entry_t *head = NULL;
+        int count = checkpoint_list_checkpoints(component_name, 1, &head); /* persistent storage */
+
+        if (count < 0) {
+            rlen = snprintf(response, sizeof(response),
+                            "Error: failed to list checkpoints\n");
+        } else if (count == 0) {
+            if (component_name) {
+                rlen = snprintf(response, sizeof(response),
+                                "No checkpoints found for component '%s'\n", component_name);
+            } else {
+                rlen = snprintf(response, sizeof(response),
+                                "No checkpoints found\n");
+            }
+        } else {
+            int pos = snprintf(response, sizeof(response),
+                              "Available checkpoints%s%s:\n",
+                              component_name ? " for " : "",
+                              component_name ? component_name : "");
+
+            checkpoint_entry_t *current = head;
+            while (current && pos < (int)sizeof(response) - 100) {
+                char time_str[64];
+                struct tm *tm_info = localtime(&current->metadata.timestamp);
+                strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+                pos += snprintf(response + pos, sizeof(response) - pos,
+                               "  %s: %s (%s, %zu bytes)\n",
+                               current->id,
+                               current->metadata.component_name,
+                               time_str,
+                               current->metadata.image_size);
+                current = current->next;
+            }
+            rlen = pos;
+        }
+
+        checkpoint_free_list(head);
+
+    } else if (strncmp(cmd, "checkpoint-rm", 13) == 0) {
+        /* Remove specific checkpoint */
+        char component_name[128] = {0};
+        char checkpoint_id[64] = {0};
+
+        /* Parse "checkpoint-rm <component> <checkpoint_id>" */
+        int args_parsed = sscanf(cmd, "checkpoint-rm %127s %63s", component_name, checkpoint_id);
+
+        if (args_parsed < 2) {
+            rlen = snprintf(response, sizeof(response),
+                            "Error: checkpoint-rm command requires component name and checkpoint ID\n"
+                            "Usage: checkpoint-rm <component_name> <checkpoint_id>\n");
+        } else {
+            int result = checkpoint_remove(component_name, checkpoint_id, 1); /* persistent storage */
+
+            if (result == 0) {
+                rlen = snprintf(response, sizeof(response),
+                                "Checkpoint %s removed successfully for component '%s'\n",
+                                checkpoint_id, component_name);
+            } else {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: failed to remove checkpoint %s for component '%s'\n",
+                                checkpoint_id, component_name);
+            }
+        }
+
+    } else if (strncmp(cmd, "migrate", 7) == 0) {
+        /* Checkpoint and prepare for migration */
+        const char *component_name = NULL;
+        if (strlen(cmd) > 8) {
+            component_name = cmd + 8; /* Skip "migrate " */
+        }
+
+        if (!component_name || strlen(component_name) == 0) {
+            rlen = snprintf(response, sizeof(response),
+                            "Error: migrate command requires component name\n"
+                            "Usage: migrate <component_name>\n");
+        } else {
+            /* First create a checkpoint */
+            int result = component_checkpoint(component_name);
+            if (result == 0) {
+                /* Find the latest checkpoint ID */
+                char latest_id[CHECKPOINT_ID_MAX_LEN];
+                char checkpoint_path[MAX_CHECKPOINT_PATH];
+
+                if (checkpoint_find_latest(component_name, 1, /* persistent storage */
+                                          latest_id, sizeof(latest_id),
+                                          checkpoint_path, sizeof(checkpoint_path)) == 0) {
+                    rlen = snprintf(response, sizeof(response),
+                                    "Component '%s' checkpointed successfully for migration\n"
+                                    "Checkpoint ID: %s\n"
+                                    "Path: %s\n"
+                                    "Use 'checkpoint-archive %s %s <archive_path>' to create portable archive\n",
+                                    component_name, latest_id, checkpoint_path,
+                                    component_name, latest_id);
+                } else {
+                    rlen = snprintf(response, sizeof(response),
+                                    "Component '%s' checkpointed, but unable to determine checkpoint ID\n",
+                                    component_name);
+                }
+            } else if (result == -1) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: component '%s' not found\n", component_name);
+            } else if (result == -2) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: CRIU not supported on this system\n");
+            } else if (result == -3) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: component '%s' is not currently active\n", component_name);
+            } else {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: migration checkpoint failed for component '%s' (error code %d)\n",
+                                component_name, result);
+            }
+        }
+
     } else if (strcmp(cmd, "check-cycles") == 0) {
         /* Detect and report dependency cycles */
         cycle_info_t cycle_info;
@@ -866,7 +1065,7 @@ void handle_control_command(int client_fd) {
     } else {
         rlen = snprintf(response, sizeof(response),
                         "Unknown command: %s\n"
-                        "Available commands: status, caps, tree <component>, rdeps <capability>, simulate remove <component>, dot, log <component> [lines], readiness, check-readiness [component], upgrade <component>, check-cycles, analyze, validate, path <cap1> <cap2>, scc\n", cmd);
+                        "Available commands: status, caps, tree <component>, rdeps <capability>, simulate remove <component>, dot, log <component> [lines], readiness, check-readiness [component], upgrade <component>, check-cycles, analyze, validate, path <cap1> <cap2>, scc, checkpoint <component>, restore <component> [checkpoint_id], checkpoint-list [component], checkpoint-rm <component> <checkpoint_id>, migrate <component>\n", cmd);
     }
 
     (void)!write(client_fd, response, rlen);

@@ -1,0 +1,34 @@
+# Example YakirOS component configuration with checkpoint support
+#
+# This demonstrates how to configure a component for CRIU-based hot-swappable upgrades
+# with full process state preservation.
+
+[component]
+name = "webserver"
+binary = "/usr/sbin/nginx"
+args = ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+type = "service"
+handoff = "checkpoint"  # Enable checkpoint-based hot-swap
+
+[provides]
+capabilities = ["web.http", "web.https"]
+
+[requires]
+capabilities = ["network.configured", "filesystem.var", "filesystem.run"]
+
+[lifecycle]
+restart_max = 5
+restart_window = 30
+reload_signal = "SIGHUP"
+
+[checkpoint]
+enabled = true
+preserve_fds = "network,filesystem"    # File descriptor types to preserve
+leave_running = true                    # Keep process running during checkpoint
+memory_estimate = 256                   # Expected RAM usage in MB for planning
+max_age = 24                           # Cleanup checkpoints older than 24 hours
+
+[resources]
+memory_max = "512M"
+memory_high = "384M"
+cpu_weight = 100
