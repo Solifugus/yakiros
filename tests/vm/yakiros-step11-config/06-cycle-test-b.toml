@@ -1,0 +1,17 @@
+# Cycle test component B - completes intentional dependency cycle for testing
+[component]
+name = "test-cycle-b"
+binary = "/usr/local/bin/test-cycle-service"
+args = ["cycle-b", "5"]
+type = "service"
+
+[provides]
+capabilities = ["test.cycle.b"]
+
+[requires]
+capabilities = ["test.cycle.a"]  # Creates cycle: B requires A, A requires B
+
+[lifecycle]
+readiness = "file"
+readiness_file = "/run/test-cycle-b-ready"
+readiness_timeout = 30

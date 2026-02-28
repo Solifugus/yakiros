@@ -1,0 +1,19 @@
+# Networking service with command-based readiness
+[component]
+name = "networking"
+binary = "/usr/local/bin/test-networking"
+type = "service"
+
+[provides]
+capabilities = ["network.configured"]
+
+[requires]
+capabilities = ["kernel"]
+
+[lifecycle]
+readiness = "command"
+readiness_command = "/usr/local/bin/test-networking-check"
+readiness_timeout = 10
+health_check = "/usr/local/bin/test-networking-health"
+health_interval = 15
+health_failures = 3

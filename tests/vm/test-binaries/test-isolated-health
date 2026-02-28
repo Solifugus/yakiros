@@ -1,0 +1,47 @@
+#!/bin/bash
+#
+# Test isolated service health check
+#
+
+# Check if service is ready
+if [ ! -f /run/test-isolated-ready ]; then
+    echo "Isolated service not ready"
+    exit 1
+fi
+
+# Check if PID file exists and process is running
+if [ ! -f /run/test-isolated.pid ]; then
+    echo "Isolated service PID file missing"
+    exit 1
+fi
+
+PID=$(cat /run/test-isolated.pid)
+if ! kill -0 $PID 2>/dev/null; then
+    echo "Isolated service process not running (PID $PID)"
+    exit 1
+fi
+
+# Check cgroup status if available
+if [ -f /sys/fs/cgroup/graph/test-isolated/memory.current ]; then
+    MEMORY_USED=$(cat /sys/fs/cgroup/graph/test-isolated/memory.current)
+    MEMORY_MAX=$(cat /sys/fs/cgroup/graph/test-isolated/memory.max)
+
+    # Check if we're approaching memory limit (90%)
+    if [ "$MEMORY_MAX" != "max" ]; then
+        MEMORY_THRESHOLD=$((MEMORY_MAX * 90 / 100))
+        if [ $MEMORY_USED -gt $MEMORY_THRESHOLD ]; then
+            echo "Isolated service approaching memory limit (${MEMORY_USED}/${MEMORY_MAX})"
+            exit 1
+        fi
+    fi
+fi
+
+# Check process count
+CHILD_COUNT=$(pgrep -P $PID | wc -l)
+if [ $CHILD_COUNT -gt 10 ]; then
+    echo "Too many child processes: $CHILD_COUNT"
+    exit 1
+fi
+
+echo "Isolated service healthy (PID $PID, children: $CHILD_COUNT)"
+exit 0

@@ -1,0 +1,32 @@
+# Stateful service for comprehensive CRIU checkpoint/restore testing
+[component]
+name = "test-stateful-service"
+binary = "/usr/local/bin/test-stateful-service"
+args = ["--port=8081", "--state-file=/run/test-stateful.state"]
+type = "service"
+handoff = "checkpoint"
+
+[provides]
+capabilities = ["test.stateful"]
+
+[requires]
+capabilities = ["network.configured"]
+
+[lifecycle]
+readiness = "file"
+readiness_file = "/run/test-stateful-ready"
+readiness_timeout = 25
+health_check = "/usr/local/bin/test-stateful-health"
+health_interval = 8
+health_failures = 3
+
+[checkpoint]
+enabled = true
+preserve_fds = "network,files"
+leave_running = true
+memory_estimate = 64
+max_age = 12
+
+[resources]
+memory_max = "100M"
+cpu_weight = 200

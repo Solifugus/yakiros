@@ -1,0 +1,27 @@
+# Hot-swap capable echo server for zero-downtime upgrade testing
+[component]
+name = "test-echo-server"
+binary = "/usr/local/bin/test-echo-server"
+args = ["8080"]
+type = "service"
+handoff = "fd-passing"
+
+[provides]
+capabilities = ["test.echo"]
+
+[requires]
+capabilities = ["network.configured"]
+
+[lifecycle]
+readiness = "file"
+readiness_file = "/run/test-echo-ready"
+readiness_timeout = 15
+health_check = "/usr/local/bin/test-echo-health"
+health_interval = 10
+health_failures = 2
+
+[checkpoint]
+enabled = true
+leave_running = true
+memory_estimate = 16
+max_age = 24

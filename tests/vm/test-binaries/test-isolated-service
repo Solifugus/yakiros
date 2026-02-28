@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# Test isolated service - demonstrates cgroups and namespace isolation
+#
+
+set -e
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [test-isolated] $*" | tee -a /var/log/test-isolated.log
+}
+
+cleanup() {
+    log "Shutting down isolated service"
+    rm -f /run/test-isolated.pid /run/test-isolated-ready
+    exit 0
+}
+
+trap cleanup TERM INT
+
+log "Starting isolated service (PID $$)"
+echo $$ > /run/test-isolated.pid
+
+# Show isolation information
+log "Isolation information:"
+log "  PID namespace: $(readlink /proc/self/ns/pid)"
+log "  Mount namespace: $(readlink /proc/self/ns/mnt)"
+log "  UTS namespace: $(readlink /proc/self/ns/uts)"
+log "  Hostname: $(hostname)"
+
+# Show memory limits from cgroup
+if [ -f /sys/fs/cgroup/graph/test-isolated/memory.max ]; then
+    MEMORY_LIMIT=$(cat /sys/fs/cgroup/graph/test-isolated/memory.max)
+    log "  Memory limit: ${MEMORY_LIMIT}"
+fi
+
+# Show CPU limits
+if [ -f /sys/fs/cgroup/graph/test-isolated/cpu.max ]; then
+    CPU_LIMIT=$(cat /sys/fs/cgroup/graph/test-isolated/cpu.max)
+    log "  CPU limit: ${CPU_LIMIT}"
+fi
+
+# Simulate some work and memory usage
+log "Performing isolated work..."
+sleep 2
+
+# Create some child processes to test PID limits
+log "Testing process limits..."
+for i in {1..5}; do
+    (sleep 60 &)
+    log "  Spawned child process $i"
+done
+
+# Signal readiness to YakirOS
+log "Isolated service ready"
+touch /run/test-isolated-ready
+
+# Send readiness signal (SIGUSR1) to graph-resolver
+GRAPH_PID=$(pgrep graph-resolver || echo "")
+if [ -n "$GRAPH_PID" ]; then
+    kill -USR1 $GRAPH_PID
+    log "Sent readiness signal to graph-resolver (PID $GRAPH_PID)"
+fi
+
+# Main service loop
+COUNTER=0
+while true; do
+    sleep 10
+    COUNTER=$((COUNTER + 1))
+    log "Isolated service heartbeat #${COUNTER}"
+
+    # Periodically show resource usage
+    if [ $((COUNTER % 6)) -eq 0 ]; then
+        if [ -f /sys/fs/cgroup/graph/test-isolated/memory.current ]; then
+            MEMORY_USED=$(cat /sys/fs/cgroup/graph/test-isolated/memory.current)
+            log "  Memory usage: ${MEMORY_USED} bytes"
+        fi
+
+        CHILD_COUNT=$(pgrep -P $$ | wc -l)
+        log "  Child processes: ${CHILD_COUNT}"
+
+        # Simulate memory pressure occasionally for testing
+        if [ $((COUNTER % 18)) -eq 0 ]; then
+            log "  Simulating memory pressure..."
+            # Allocate some memory briefly
+            python3 -c "
+import time
+data = bytearray(10 * 1024 * 1024)  # 10MB
+time.sleep(2)
+" 2>/dev/null || log "  Memory allocation test completed"
+        fi
+    fi
+done

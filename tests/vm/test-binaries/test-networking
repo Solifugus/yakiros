@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+# Test networking service - simulates network configuration
+#
+
+set -e
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [test-networking] $*" | tee -a /var/log/test-networking.log
+}
+
+cleanup() {
+    log "Shutting down networking service"
+    rm -f /run/test-networking.pid /run/test-networking-ready
+    exit 0
+}
+
+trap cleanup TERM INT
+
+log "Starting networking service"
+echo $$ > /run/test-networking.pid
+
+# Simulate network initialization
+log "Initializing network configuration..."
+sleep 2
+
+# Simulate bringing up interfaces
+log "Configuring network interfaces..."
+sleep 1
+
+# Signal readiness for command-based readiness check
+log "Network configuration complete - ready for service"
+touch /run/test-networking-ready
+
+# Keep service running
+while true; do
+    sleep 10
+    log "Network service heartbeat"
+done

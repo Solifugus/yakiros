@@ -1,0 +1,23 @@
+# Monitoring service that depends on multiple other services
+[component]
+name = "test-monitor"
+binary = "/usr/local/bin/test-monitor"
+type = "service"
+
+[provides]
+capabilities = ["test.monitor"]
+
+[requires]
+capabilities = ["test.echo", "test.stateful", "test.health.demo"]
+
+[lifecycle]
+readiness = "file"
+readiness_file = "/run/test-monitor-ready"
+readiness_timeout = 45  # Longer timeout since it depends on many services
+health_check = "/usr/local/bin/test-monitor-health"
+health_interval = 20
+health_failures = 1
+
+[resources]
+memory_max = "30M"
+cpu_weight = 50

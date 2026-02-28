@@ -1,0 +1,21 @@
+# Health check demonstration service - can be controlled to pass/fail health checks
+[component]
+name = "test-health-demo"
+binary = "/usr/local/bin/test-health-demo"
+type = "service"
+
+[provides]
+capabilities = ["test.health.demo"]
+
+[requires]
+capabilities = ["network.configured"]
+
+[lifecycle]
+readiness = "command"
+readiness_command = "/usr/local/bin/test-health-demo-check"
+readiness_timeout = 15
+health_check = "/usr/local/bin/test-health-demo-health"
+health_interval = 5  # Frequent checks for demo purposes
+health_failures = 2  # Fail quickly for testing
+
+# No isolation or checkpointing - focus on health functionality

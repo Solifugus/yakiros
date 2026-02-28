@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+# Health demo health check - can be controlled via files
+#
+
+# Check if service is running
+if [ ! -f /run/test-health-demo.pid ] || ! kill -0 $(cat /run/test-health-demo.pid) 2>/dev/null; then
+    echo "Health demo service not running"
+    exit 1
+fi
+
+# Check if artificial failure flag is set
+if [ -f /run/test-health-demo-fail ]; then
+    echo "Health demo service is unhealthy (artificial failure)"
+    exit 1
+fi
+
+echo "Health demo service is healthy"
+exit 0

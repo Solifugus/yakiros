@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# Health demo readiness check
+#
+
+# Check if service is ready
+if [ -f /run/test-health-demo-ready ]; then
+    echo "Health demo service is ready"
+    exit 0
+else
+    echo "Health demo service not ready yet"
+    exit 1
+fi

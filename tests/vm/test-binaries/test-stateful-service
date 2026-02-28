@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""
+Stateful service for CRIU checkpoint/restore testing.
+
+This service:
+1. Maintains persistent state in memory and file
+2. Accepts HTTP connections to show/modify state
+3. Can be checkpointed and restored with CRIU
+4. Demonstrates state preservation across upgrades
+"""
+
+import os
+import sys
+import json
+import time
+import threading
+import signal
+from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+class StatefulService:
+    def __init__(self, port=8081, state_file='/run/test-stateful.state'):
+        self.port = port
+        self.state_file = state_file
+        self.running = True
+
+        # In-memory state that should survive checkpointing
+        self.state = {
+            'counter': 0,
+            'requests': 0,
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint': None,
+            'messages': []
+        }
+
+        # Load state from file if it exists
+        self.load_state()
+
+        self.log_file = open('/var/log/test-stateful.log', 'a')
+
+    def log(self, message):
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_msg = f"[{timestamp}] [test-stateful] {message}\n"
+        self.log_file.write(log_msg)
+        self.log_file.flush()
+        print(log_msg.strip())
+
+    def load_state(self):
+        """Load state from disk"""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r') as f:
+                    saved_state = json.load(f)
+                    self.state.update(saved_state)
+                    self.log(f"Loaded state from {self.state_file}: counter={self.state['counter']}")
+        except Exception as e:
+            self.log(f"Failed to load state: {e}")
+
+    def save_state(self):
+        """Save state to disk"""
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except Exception as e:
+            self.log(f"Failed to save state: {e}")
+
+    def handle_checkpoint_request(self, signum, frame):
+        """Handle SIGUSR1 - prepare for checkpointing"""
+        self.log("Checkpoint preparation signal received")
+        self.state['last_checkpoint'] = datetime.now().isoformat()
+        self.save_state()
+        self.log("State saved for checkpointing")
+
+class StatefulHTTPHandler(BaseHTTPRequestHandler):
+    def __init__(self, service, *args, **kwargs):
+        self.service = service
+        super().__init__(*args, **kwargs)
+
+    def log_message(self, format, *args):
+        # Suppress default HTTP server logging
+        pass
+
+    def do_GET(self):
+        """Handle GET requests"""
+        self.service.state['requests'] += 1
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == '/':
+            # Show current state
+            response = {
+                'status': 'running',
+                'state': self.service.state,
+                'pid': os.getpid(),
+                'timestamp': datetime.now().isoformat()
+            }
+            self.send_json_response(200, response)
+
+        elif path == '/increment':
+            # Increment counter
+            self.service.state['counter'] += 1
+            self.service.save_state()
+            response = {
+                'action': 'increment',
+                'counter': self.service.state['counter']
+            }
+            self.send_json_response(200, response)
+
+        elif path == '/status':
+            # Health check endpoint
+            response = {
+                'status': 'healthy',
+                'uptime': datetime.now().isoformat(),
+                'counter': self.service.state['counter']
+            }
+            self.send_json_response(200, response)
+
+        else:
+            self.send_json_response(404, {'error': 'Not found'})
+
+    def do_POST(self):
+        """Handle POST requests"""
+        self.service.state['requests'] += 1
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == '/message':
+            # Add a message to state
+            try:
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode('utf-8'))
+
+                message = {
+                    'text': data.get('text', ''),
+                    'timestamp': datetime.now().isoformat()
+                }
+                self.service.state['messages'].append(message)
+
+                # Keep only last 10 messages
+                if len(self.service.state['messages']) > 10:
+                    self.service.state['messages'] = self.service.state['messages'][-10:]
+
+                self.service.save_state()
+
+                response = {
+                    'action': 'message_added',
+                    'message': message,
+                    'total_messages': len(self.service.state['messages'])
+                }
+                self.send_json_response(200, response)
+
+            except Exception as e:
+                self.send_json_response(400, {'error': str(e)})
+
+        else:
+            self.send_json_response(404, {'error': 'Not found'})
+
+    def send_json_response(self, status, data):
+        """Send JSON response"""
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        response_text = json.dumps(data, indent=2)
+        self.wfile.write(response_text.encode('utf-8'))
+
+def create_handler(service):
+    """Create HTTP handler with access to service instance"""
+    def handler(*args, **kwargs):
+        StatefulHTTPHandler(service, *args, **kwargs)
+    return handler
+
+def main():
+    port = 8081
+    state_file = '/run/test-stateful.state'
+
+    # Parse command line arguments
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i].startswith('--port='):
+            port = int(sys.argv[i].split('=')[1])
+        elif sys.argv[i].startswith('--state-file='):
+            state_file = sys.argv[i].split('=')[1]
+        i += 1
+
+    service = StatefulService(port, state_file)
+    service.log(f"Starting stateful service on port {port}")
+
+    # Set up checkpoint signal handler
+    signal.signal(signal.SIGUSR1, service.handle_checkpoint_request)
+
+    try:
+        # Create HTTP server
+        server = HTTPServer(('', port), create_handler(service))
+        service.log(f"HTTP server listening on port {port}")
+
+        # Create readiness file
+        with open('/run/test-stateful-ready', 'w') as f:
+            f.write(f"Ready at {datetime.now().isoformat()}\n")
+            f.write(f"Port: {port}\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write(f"State file: {state_file}\n")
+
+        service.log("Stateful service ready")
+
+        # Background thread to periodically save state and update counter
+        def background_work():
+            while service.running:
+                time.sleep(30)  # Every 30 seconds
+                if service.running:
+                    service.state['counter'] += 1
+                    service.save_state()
+                    service.log(f"Background update: counter={service.state['counter']}")
+
+        bg_thread = threading.Thread(target=background_work, daemon=True)
+        bg_thread.start()
+
+        # Run server
+        while service.running:
+            server.handle_request()
+
+    except KeyboardInterrupt:
+        service.log("Interrupted by user")
+    except Exception as e:
+        service.log(f"Server error: {e}")
+    finally:
+        service.log("Stateful service shutting down")
+        service.running = False
+        service.save_state()
+        try:
+            os.remove('/run/test-stateful-ready')
+        except:
+            pass
+        service.log_file.close()
+
+if __name__ == '__main__':
+    main()

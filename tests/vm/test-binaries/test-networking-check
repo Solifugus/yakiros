@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# Test networking readiness check
+#
+
+# Check if networking service is ready
+if [ -f /run/test-networking-ready ]; then
+    echo "Network is configured and ready"
+    exit 0
+else
+    echo "Network not ready yet"
+    exit 1
+fi

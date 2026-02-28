@@ -1,0 +1,58 @@
+#!/bin/bash
+#
+# Test cycle service - used for dependency cycle testing
+#
+
+set -e
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <service-name> <delay>"
+    echo "  service-name: cycle-a or cycle-b"
+    echo "  delay: seconds to delay before marking ready"
+    exit 1
+fi
+
+SERVICE_NAME="$1"
+DELAY="$2"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [test-${SERVICE_NAME}] $*" | tee -a /var/log/test-${SERVICE_NAME}.log
+}
+
+cleanup() {
+    log "Shutting down ${SERVICE_NAME}"
+    rm -f /run/test-${SERVICE_NAME}.pid /run/test-${SERVICE_NAME}-ready
+    exit 0
+}
+
+trap cleanup TERM INT
+
+log "Starting ${SERVICE_NAME} (PID $$)"
+echo $$ > /run/test-${SERVICE_NAME}.pid
+
+# Wait for specified delay to simulate dependency resolution issues
+log "Waiting ${DELAY} seconds before becoming ready..."
+sleep "$DELAY"
+
+# Create readiness file
+log "${SERVICE_NAME} is ready"
+touch /run/test-${SERVICE_NAME}-ready
+
+# Main service loop
+COUNTER=0
+while true; do
+    sleep 15
+    COUNTER=$((COUNTER + 1))
+    log "${SERVICE_NAME} heartbeat #${COUNTER}"
+
+    # Show dependency information
+    if [ $((COUNTER % 4)) -eq 0 ]; then
+        if [ "$SERVICE_NAME" = "cycle-a" ]; then
+            log "  This service provides: test.cycle.a"
+            log "  This service requires: test.cycle.b"
+        else
+            log "  This service provides: test.cycle.b"
+            log "  This service requires: test.cycle.a"
+        fi
+    fi
+done

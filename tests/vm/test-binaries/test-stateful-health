@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# Test stateful service health check
+#
+
+# Check if readiness file exists
+if [ ! -f /run/test-stateful-ready ]; then
+    echo "Stateful service not ready"
+    exit 1
+fi
+
+# Get port from readiness file
+PORT=$(grep "Port:" /run/test-stateful-ready | cut -d: -f2 | tr -d ' ')
+
+# Test HTTP endpoint
+HTTP_RESPONSE=$(curl -s --max-time 5 "http://localhost:${PORT}/status" 2>/dev/null)
+
+if [ $? -eq 0 ] && echo "$HTTP_RESPONSE" | grep -q '"status": "healthy"'; then
+    COUNTER=$(echo "$HTTP_RESPONSE" | grep -o '"counter": [0-9]*' | cut -d: -f2 | tr -d ' ')
+    echo "Stateful service healthy (counter: $COUNTER)"
+    exit 0
+else
+    echo "Stateful service not responding properly"
+    exit 1
+fi

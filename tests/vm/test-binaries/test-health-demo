@@ -1,0 +1,56 @@
+#!/bin/bash
+#
+# Health check demonstration service
+# Can be controlled to simulate health failures for testing
+#
+
+set -e
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [test-health-demo] $*" | tee -a /var/log/test-health-demo.log
+}
+
+cleanup() {
+    log "Shutting down health demo service"
+    rm -f /run/test-health-demo.pid /run/test-health-demo-ready
+    rm -f /run/test-health-demo-fail  # Remove failure flag if present
+    exit 0
+}
+
+trap cleanup TERM INT
+
+log "Starting health demo service (PID $$)"
+echo $$ > /run/test-health-demo.pid
+
+# Simulate startup time
+log "Initializing health demo service..."
+sleep 3
+
+# Create readiness file
+log "Health demo service ready"
+touch /run/test-health-demo-ready
+
+# Main service loop
+COUNTER=0
+while true; do
+    sleep 8
+    COUNTER=$((COUNTER + 1))
+    log "Health demo heartbeat #${COUNTER}"
+
+    # Periodically show instructions for controlling health
+    if [ $((COUNTER % 10)) -eq 0 ]; then
+        log "Control commands:"
+        log "  Make healthy:   rm -f /run/test-health-demo-fail"
+        log "  Make unhealthy: touch /run/test-health-demo-fail"
+        log "  Current status: $([ -f /run/test-health-demo-fail ] && echo 'UNHEALTHY' || echo 'HEALTHY')"
+    fi
+
+    # Simulate occasional random failures for realistic testing
+    if [ $((RANDOM % 100)) -lt 5 ]; then  # 5% chance
+        log "Simulating temporary health issue..."
+        touch /run/test-health-demo-fail
+        sleep 20  # Unhealthy for 20 seconds
+        rm -f /run/test-health-demo-fail
+        log "Recovered from temporary health issue"
+    fi
+done

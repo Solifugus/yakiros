@@ -1,0 +1,36 @@
+# Isolated service demonstrating cgroups and namespace features
+[component]
+name = "test-isolated-service"
+binary = "/usr/local/bin/test-isolated-service"
+type = "service"
+
+[provides]
+capabilities = ["test.isolated"]
+
+[requires]
+capabilities = ["network.configured"]
+
+[lifecycle]
+readiness = "signal"
+readiness_timeout = 20
+health_check = "/usr/local/bin/test-isolated-health"
+health_interval = 12
+health_failures = 2
+
+[resources]
+cgroup_path = "test-isolated"
+memory_max = "50M"
+memory_high = "40M"
+cpu_weight = 100
+cpu_max = "50000 100000"  # 50% of one CPU
+pids_max = 20
+
+[isolation]
+namespaces = ["pid", "mount", "uts"]
+hostname = "isolated-test-env"
+private_tmp = true
+
+[checkpoint]
+enabled = true
+leave_running = false
+memory_estimate = 32

@@ -1,0 +1,108 @@
+#!/bin/bash
+#
+# Test monitor service - depends on multiple other services
+# Demonstrates complex dependency resolution
+#
+
+set -e
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [test-monitor] $*" | tee -a /var/log/test-monitor.log
+}
+
+cleanup() {
+    log "Shutting down monitor service"
+    rm -f /run/test-monitor.pid /run/test-monitor-ready
+    exit 0
+}
+
+trap cleanup TERM INT
+
+log "Starting monitor service (PID $$)"
+echo $$ > /run/test-monitor.pid
+
+# Check that all required services are available
+log "Checking required service dependencies..."
+
+# Check echo service
+if [ ! -f /run/test-echo-ready ]; then
+    log "ERROR: Echo service not ready"
+    exit 1
+fi
+log "✓ Echo service is ready"
+
+# Check stateful service
+if [ ! -f /run/test-stateful-ready ]; then
+    log "ERROR: Stateful service not ready"
+    exit 1
+fi
+log "✓ Stateful service is ready"
+
+# Check health demo service
+if [ ! -f /run/test-health-demo-ready ]; then
+    log "ERROR: Health demo service not ready"
+    exit 1
+fi
+log "✓ Health demo service is ready"
+
+log "All dependencies satisfied - monitor service starting..."
+sleep 2
+
+# Create readiness file
+log "Monitor service ready"
+touch /run/test-monitor-ready
+
+# Main monitoring loop
+COUNTER=0
+while true; do
+    sleep 20
+    COUNTER=$((COUNTER + 1))
+    log "Monitor heartbeat #${COUNTER}"
+
+    # Periodically check the status of monitored services
+    if [ $((COUNTER % 3)) -eq 0 ]; then
+        log "Checking monitored services:"
+
+        # Check echo service
+        if [ -f /run/test-echo-ready ]; then
+            ECHO_PID=$(grep "PID:" /run/test-echo-ready | cut -d: -f2 | tr -d ' ')
+            log "  Echo server: Running (PID $ECHO_PID)"
+        else
+            log "  Echo server: Not ready"
+        fi
+
+        # Check stateful service
+        if [ -f /run/test-stateful-ready ]; then
+            STATEFUL_PID=$(grep "PID:" /run/test-stateful-ready | cut -d: -f2 | tr -d ' ')
+            log "  Stateful service: Running (PID $STATEFUL_PID)"
+
+            # Try to get counter value
+            STATEFUL_PORT=$(grep "Port:" /run/test-stateful-ready | cut -d: -f2 | tr -d ' ')
+            if COUNTER_INFO=$(curl -s --max-time 3 "http://localhost:${STATEFUL_PORT}/status" 2>/dev/null); then
+                COUNTER_VAL=$(echo "$COUNTER_INFO" | grep -o '"counter": [0-9]*' | cut -d: -f2 | tr -d ' ')
+                log "    Counter value: $COUNTER_VAL"
+            fi
+        else
+            log "  Stateful service: Not ready"
+        fi
+
+        # Check health demo service
+        if [ -f /run/test-health-demo.pid ] && kill -0 $(cat /run/test-health-demo.pid) 2>/dev/null; then
+            HEALTH_STATUS="Running"
+            if [ -f /run/test-health-demo-fail ]; then
+                HEALTH_STATUS="Running (artificially unhealthy)"
+            fi
+            log "  Health demo: $HEALTH_STATUS"
+        else
+            log "  Health demo: Not running"
+        fi
+    fi
+
+    # Show system resource information occasionally
+    if [ $((COUNTER % 5)) -eq 0 ]; then
+        log "System information:"
+        log "  Load average: $(uptime | awk -F'load average:' '{print $2}')"
+        log "  Memory usage: $(free -m | awk 'NR==2{printf "%.1f%%", $3*100/$2}')"
+        log "  YakirOS processes: $(ps aux | grep -c '[g]raph-resolver')"
+    fi
+done

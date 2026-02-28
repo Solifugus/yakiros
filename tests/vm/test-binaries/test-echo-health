@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Test echo server health check
+#
+
+# Check if readiness file exists
+if [ ! -f /run/test-echo-ready ]; then
+    echo "Echo server not ready"
+    exit 1
+fi
+
+# Try to connect to the echo server
+PORT=$(grep "Port:" /run/test-echo-ready | cut -d: -f2 | tr -d ' ')
+
+# Test connection with timeout
+if timeout 3 bash -c "</dev/tcp/localhost/${PORT}"; then
+    echo "Echo server responding on port ${PORT}"
+    exit 0
+else
+    echo "Echo server not responding on port ${PORT}"
+    exit 1
+fi

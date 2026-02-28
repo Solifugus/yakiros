@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# Test networking health check
+#
+
+# Check if service is still running
+if [ -f /run/test-networking.pid ] && kill -0 $(cat /run/test-networking.pid) 2>/dev/null; then
+    # Simulate occasional network health issues for testing
+    if [ $((RANDOM % 20)) -eq 0 ]; then
+        echo "Network connectivity issue detected"
+        exit 1
+    fi
+    echo "Network service healthy"
+    exit 0
+else
+    echo "Network service not running"
+    exit 1
+fi

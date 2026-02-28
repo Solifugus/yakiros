@@ -1,0 +1,45 @@
+#!/bin/bash
+#
+# Test monitor service health check
+#
+
+# Check if service is ready
+if [ ! -f /run/test-monitor-ready ]; then
+    echo "Monitor service not ready"
+    exit 1
+fi
+
+# Check if PID file exists and process is running
+if [ ! -f /run/test-monitor.pid ]; then
+    echo "Monitor service PID file missing"
+    exit 1
+fi
+
+PID=$(cat /run/test-monitor.pid)
+if ! kill -0 $PID 2>/dev/null; then
+    echo "Monitor service process not running (PID $PID)"
+    exit 1
+fi
+
+# Check that at least some monitored services are still available
+SERVICES_UP=0
+
+if [ -f /run/test-echo-ready ]; then
+    SERVICES_UP=$((SERVICES_UP + 1))
+fi
+
+if [ -f /run/test-stateful-ready ]; then
+    SERVICES_UP=$((SERVICES_UP + 1))
+fi
+
+if [ -f /run/test-health-demo-ready ]; then
+    SERVICES_UP=$((SERVICES_UP + 1))
+fi
+
+if [ $SERVICES_UP -lt 2 ]; then
+    echo "Monitor service unhealthy - too few monitored services available ($SERVICES_UP/3)"
+    exit 1
+fi
+
+echo "Monitor service healthy (monitoring $SERVICES_UP/3 services)"
+exit 0

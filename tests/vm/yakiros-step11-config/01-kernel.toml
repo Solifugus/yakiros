@@ -1,0 +1,14 @@
+# Kernel capability provider - foundation for all other services
+[component]
+name = "kernel"
+binary = "/bin/true"
+type = "oneshot"
+
+[provides]
+capabilities = ["kernel", "proc", "sys", "dev"]
+
+[requires]
+capabilities = []
+
+[lifecycle]
+readiness = "none"  # Always ready immediately
