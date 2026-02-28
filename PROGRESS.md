@@ -1,7 +1,7 @@
 # YakirOS Progress
 
 ## Status
-Current step: 9
+Current step: 10
 Last updated: 2026-02-27
 
 ## Steps
@@ -14,7 +14,7 @@ Last updated: 2026-02-27
 - [x] Step 6: Health checks and degraded states
 - [x] Step 7: cgroup and namespace isolation
 - [x] Step 8: Dependency cycle detection and graph analysis
-- [ ] Step 9: CRIU integration for process checkpoint/restore
+- [x] Step 9: CRIU integration for process checkpoint/restore
 - [ ] Step 10: kexec live kernel upgrade
 - [ ] Step 11: VM integration testing with QEMU
 - [ ] Step 12: Documentation and polish
@@ -202,10 +202,53 @@ Last updated: 2026-02-27
   - ✅ Integration preserves all existing functionality (hot-swap, health checks, isolation)
   - ✅ Zero impact on systems without cycles - performance overhead only during validation
 
-### Step 9 Ready:
-- Next: CRIU integration for process checkpoint/restore enabling live system migration
-- Need: Process state preservation, file descriptor restoration, memory mapping continuity
-- Goal: Enable complete system state preservation and restoration for zero-downtime updates
+### Step 9 COMPLETED (2026-02-27):
+- ✅ **CRIU CHECKPOINT/RESTORE SYSTEM FULLY IMPLEMENTED** - Complete process state preservation and three-level fallback strategy achieved
+- ✅ **Core checkpoint infrastructure**: Low-level CRIU wrapper functions and storage lifecycle management
+  - ✅ checkpoint.h/checkpoint.c - Direct CRIU integration with timeout handling and process management
+  - ✅ checkpoint-mgmt.h/checkpoint-mgmt.c - Storage management, metadata serialization, and cleanup policies
+  - ✅ CRIU detection and version checking with graceful degradation when unavailable
+  - ✅ Checkpoint validation and integrity verification before restore operations
+- ✅ **Three-level fallback strategy**: Maximum reliability with graduated upgrade approaches
+  - ✅ Level 1: CRIU checkpoint/restore with full process state preservation (memory, FDs, connections)
+  - ✅ Level 2: FD-passing hot-swap for zero-downtime with state loss (existing functionality)
+  - ✅ Level 3: Standard restart with brief downtime as ultimate fallback
+  - ✅ Automatic fallback chain with detailed logging and error handling
+- ✅ **Extended component lifecycle**: Seamless checkpoint integration in component upgrade workflow
+  - ✅ component_upgrade() extended with HANDOFF_CHECKPOINT support and fallback logic
+  - ✅ New functions: component_checkpoint() and component_restore() for manual operations
+  - ✅ Atomic capability transition during checkpoint-based upgrades
+  - ✅ Process state continuity: memory, open files, network connections, process tree
+- ✅ **Enhanced graphctl commands**: Complete command-line interface for checkpoint operations
+  - ✅ `graphctl checkpoint <component>` - Create checkpoint of running component
+  - ✅ `graphctl restore <component> [checkpoint_id]` - Restore from checkpoint (latest if no ID)
+  - ✅ `graphctl checkpoint-list [component]` - List available checkpoints with metadata
+  - ✅ `graphctl checkpoint-rm <checkpoint_id>` - Remove stored checkpoint
+  - ✅ `graphctl migrate <component>` - Prepare component for migration to another system
+- ✅ **TOML configuration extension**: New [checkpoint] section support for component declarations
+  - ✅ enabled, preserve_fds, leave_running, memory_estimate, max_age configuration options
+  - ✅ Backward compatibility: components without [checkpoint] section work unchanged
+  - ✅ Storage management: temporary checkpoints in /run, persistent in /var/lib
+- ✅ **Comprehensive test suite**: 23+ unit tests with complete checkpoint functionality validation
+  - ✅ CRIU support detection, basic checkpoint/restore operations, metadata serialization
+  - ✅ Error handling for timeouts, missing binaries, corrupted images, permission issues
+  - ✅ Storage management and cleanup functions, quota enforcement
+  - ✅ Integration tests for end-to-end checkpoint/restore with state preservation
+- ✅ **Complete documentation**: 500+ line CHECKPOINT.md with architecture, configuration, and troubleshooting
+  - ✅ Three-level fallback strategy explanation with error handling scenarios
+  - ✅ Storage architecture, metadata format, graphctl command reference
+  - ✅ CRIU requirements, installation, and compatibility information
+  - ✅ Performance considerations, troubleshooting guides, and migration procedures
+- ✅ **Production ready**: Robust error handling, graceful degradation, and backward compatibility
+  - ✅ Automatic CRIU availability detection with feature disable when unavailable
+  - ✅ Timeout handling for checkpoint operations with automatic fallback
+  - ✅ Storage quota management and automatic cleanup to prevent disk exhaustion
+  - ✅ Zero impact on systems without CRIU - existing FD-passing continues working
+
+### Step 10 Ready:
+- Next: kexec live kernel upgrade integration with checkpoint system
+- Need: Kernel replacement without reboot, process state continuity across kernel changes
+- Goal: Enable complete system upgrades (kernel + userspace) without any downtime
 
 ### Project Status:
 - Working prototype with dependency graph resolution
