@@ -36,7 +36,7 @@
 
 /* Checkpoint ID format: timestamp-based for sorting */
 #define CHECKPOINT_ID_FORMAT "%ld"
-#define CHECKPOINT_ID_MAX_LEN 32
+#define CHECKPOINT_ID_MAX_LEN 256
 
 /* Storage quota information */
 typedef struct {

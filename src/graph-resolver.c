@@ -31,6 +31,7 @@
 #include "graph.h"
 #include "control.h"
 #include "cgroup.h"
+#include "kexec.h"
 
 /* Global state */
 static int sigchld_pipe[2] = {-1, -1};
@@ -209,6 +210,63 @@ int main(int argc, char *argv[]) {
     /* Early boot: mount virtual filesystems (only if PID 1) */
     if (getpid() == 1) {
         mount_early_fs();
+    }
+
+    /* Initialize kexec subsystem */
+    if (kexec_init() != KEXEC_SUCCESS) {
+        LOG_WARN("failed to initialize kexec subsystem - live kernel upgrades disabled");
+    }
+
+    /* Check for post-kexec restoration (only if PID 1) */
+    if (getpid() == 1) {
+        char checkpoint_dir[MAX_KERNEL_PATH];
+        if (kexec_parse_cmdline("", checkpoint_dir, sizeof(checkpoint_dir)) == KEXEC_SUCCESS) {
+            /* Use custom checkpoint directory from kernel command line */
+        } else {
+            strcpy(checkpoint_dir, "/checkpoint"); /* Default */
+        }
+
+        if (kexec_needs_restore(checkpoint_dir)) {
+            LOG_INFO("post-kexec: checkpoint data found, restoring system state");
+
+            checkpoint_manifest_t *manifest = NULL;
+            int result = kexec_load_manifest(checkpoint_dir, &manifest);
+
+            if (result == KEXEC_SUCCESS && manifest) {
+                LOG_INFO("post-kexec: loaded manifest with %u entries from %s kernel",
+                         manifest->entry_count, manifest->old_kernel_version);
+
+                /* Restore all checkpointed processes */
+                result = kexec_restore_all(checkpoint_dir, manifest);
+
+                if (result == KEXEC_SUCCESS) {
+                    LOG_INFO("post-kexec: restoration successful, cleaning up checkpoint data");
+                    kexec_cleanup_checkpoints(checkpoint_dir);
+
+                    /* Log successful kernel upgrade */
+                    char current_kernel[256];
+                    if (kexec_get_current_kernel_version(current_kernel, sizeof(current_kernel)) == KEXEC_SUCCESS) {
+                        LOG_INFO("=== LIVE KERNEL UPGRADE COMPLETED ===");
+                        LOG_INFO("Previous kernel: %s", manifest->old_kernel_version);
+                        LOG_INFO("Current kernel:  %s", current_kernel);
+                        LOG_INFO("Restored %u processes with preserved state", manifest->entry_count);
+                        LOG_INFO("System continues without reboot - upgrade successful!");
+                        LOG_INFO("======================================");
+                    }
+                } else {
+                    LOG_ERR("post-kexec: restoration failed: %s", kexec_error_string(result));
+                    LOG_ERR("system may be partially functional");
+                    /* Continue anyway - some manual recovery may be possible */
+                }
+
+                free(manifest);
+            } else {
+                LOG_ERR("post-kexec: failed to load checkpoint manifest: %s",
+                         kexec_error_string(result));
+                LOG_ERR("cannot restore pre-kexec state, starting fresh");
+                /* Continue with fresh start */
+            }
+        }
     }
 
     /* Set up self-pipe for SIGCHLD */

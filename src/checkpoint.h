@@ -16,7 +16,7 @@
 #include <time.h>
 
 /* Maximum path lengths for checkpoint directories and files */
-#define MAX_CHECKPOINT_PATH 512
+#define MAX_CHECKPOINT_PATH 1024
 #define MAX_CHECKPOINT_ID 64
 
 /* Default checkpoint timeout in seconds */

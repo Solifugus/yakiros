@@ -318,7 +318,7 @@ int checkpoint_list_checkpoints(const char *component_name, int persistent,
             continue;
         }
 
-        char entry_path[512];
+        char entry_path[1024];
         snprintf(entry_path, sizeof(entry_path), "%s/%s", search_dir, entry->d_name);
 
         struct stat st;
@@ -353,10 +353,8 @@ int checkpoint_list_checkpoints(const char *component_name, int persistent,
         }
 
         memset(new_entry, 0, sizeof(*new_entry));
-        strncpy(new_entry->id, entry->d_name, sizeof(new_entry->id) - 1);
-        new_entry->id[sizeof(new_entry->id) - 1] = '\0';
-        strncpy(new_entry->path, entry_path, sizeof(new_entry->path) - 1);
-        new_entry->path[sizeof(new_entry->path) - 1] = '\0';
+        snprintf(new_entry->id, sizeof(new_entry->id), "%s", entry->d_name);
+        snprintf(new_entry->path, sizeof(new_entry->path), "%s", entry_path);
 
         /* Load metadata if available */
         if (checkpoint_load_metadata(entry_path, &new_entry->metadata) != 0) {
@@ -563,7 +561,7 @@ int checkpoint_migrate_to_persistent(const char *component_name,
     }
 
     /* Use system cp command for recursive copy */
-    char cmd[1024];
+    char cmd[2048];
     snprintf(cmd, sizeof(cmd), "cp -r '%s' '%s'", src_path, dst_path);
 
     int result = system(cmd);

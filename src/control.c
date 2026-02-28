@@ -9,6 +9,7 @@
 #include "log.h"
 #include "checkpoint.h"
 #include "checkpoint-mgmt.h"
+#include "kexec.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -1062,10 +1063,119 @@ void handle_control_command(int client_fd) {
             free(scc_components);
         }
 
+    } else if (strncmp(cmd, "kexec", 5) == 0) {
+        /* Perform live kernel upgrade */
+        if (strncmp(cmd, "kexec --dry-run", 15) == 0) {
+            /* Dry run mode - validate without executing */
+            const char *kernel_path = NULL;
+            if (strlen(cmd) > 16) {
+                kernel_path = cmd + 16; /* Skip "kexec --dry-run " */
+            }
+
+            if (!kernel_path || strlen(kernel_path) == 0) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: kernel path required\n"
+                                "Usage: kexec --dry-run <kernel_path> [--initrd <initrd_path>] [--append <cmdline>]\n");
+            } else {
+                /* Parse additional arguments (simplified parsing) */
+                char kernel_only[MAX_KERNEL_PATH];
+                sscanf(kernel_path, "%1023s", kernel_only); /* Get just the kernel path */
+
+                LOG_INFO("performing dry-run kexec validation for kernel: %s", kernel_only);
+
+                int result = kexec_perform(kernel_only, NULL, NULL, KEXEC_FLAG_DRY_RUN);
+
+                if (result == KEXEC_SUCCESS) {
+                    rlen = snprintf(response, sizeof(response),
+                                    "✓ Dry run successful - kexec would proceed with kernel: %s\n"
+                                    "  - Kernel validation: PASSED\n"
+                                    "  - System readiness: READY\n"
+                                    "  - CRIU support: AVAILABLE\n"
+                                    "  - Checkpoint storage: ACCESSIBLE\n\n"
+                                    "Use 'kexec %s' to perform the actual kernel upgrade.\n", kernel_only, kernel_only);
+                } else {
+                    rlen = snprintf(response, sizeof(response),
+                                    "✗ Dry run failed: %s\n"
+                                    "Kernel upgrade cannot proceed with current configuration.\n",
+                                    kexec_error_string(result));
+                }
+            }
+        } else {
+            /* Full kexec execution */
+            const char *kernel_path = NULL;
+            if (strlen(cmd) > 6) {
+                kernel_path = cmd + 6; /* Skip "kexec " */
+            }
+
+            if (!kernel_path || strlen(kernel_path) == 0) {
+                rlen = snprintf(response, sizeof(response),
+                                "Error: kernel path required\n"
+                                "Usage: kexec <kernel_path> [--initrd <initrd_path>] [--append <cmdline>]\n"
+                                "       kexec --dry-run <kernel_path> [options]\n\n"
+                                "Examples:\n"
+                                "  kexec /boot/vmlinuz-6.1.0-new\n"
+                                "  kexec /boot/vmlinuz-6.1.0-new --initrd /boot/initrd.img-6.1.0-new\n"
+                                "  kexec --dry-run /boot/vmlinuz-6.1.0-new  # Test without executing\n\n"
+                                "WARNING: This will replace the running kernel. All processes will be\n"
+                                "checkpointed and restored, but this is a dangerous operation!\n");
+            } else {
+                /* Parse arguments (simplified parsing) */
+                char kernel_only[MAX_KERNEL_PATH];
+                char *initrd_path = NULL;
+                char *cmdline = NULL;
+
+                /* Extract just the kernel path for now (full parsing would be more complex) */
+                sscanf(kernel_path, "%1023s", kernel_only);
+
+                /* Look for --initrd option */
+                char *initrd_opt = strstr(kernel_path, "--initrd");
+                if (initrd_opt) {
+                    /* This is simplified - production would need proper argument parsing */
+                    static char initrd_buf[MAX_KERNEL_PATH];
+                    if (sscanf(initrd_opt, "--initrd %1023s", initrd_buf) == 1) {
+                        initrd_path = initrd_buf;
+                    }
+                }
+
+                /* Look for --append option */
+                char *append_opt = strstr(kernel_path, "--append");
+                if (append_opt) {
+                    /* This is simplified - production would need proper quoted string parsing */
+                    static char cmdline_buf[MAX_CMDLINE_LEN];
+                    if (sscanf(append_opt, "--append \"%2047[^\"]\"", cmdline_buf) == 1) {
+                        cmdline = cmdline_buf;
+                    }
+                }
+
+                LOG_INFO("initiating live kernel upgrade: kernel=%s, initrd=%s, cmdline=%s",
+                         kernel_only, initrd_path ? initrd_path : "none", cmdline ? cmdline : "default");
+
+                rlen = snprintf(response, sizeof(response),
+                                "=== LIVE KERNEL UPGRADE INITIATED ===\n"
+                                "Target kernel: %s\n"
+                                "Initrd: %s\n"
+                                "Command line: %s\n\n"
+                                "Phase 1: Validation...\n", kernel_only,
+                                initrd_path ? initrd_path : "none",
+                                cmdline ? cmdline : "default");
+
+                (void)!write(client_fd, response, rlen); /* Send status update */
+
+                /* Perform the kexec - this should not return on success */
+                int result = kexec_perform(kernel_only, initrd_path, cmdline, KEXEC_FLAG_NONE);
+
+                /* If we get here, kexec failed */
+                rlen = snprintf(response, sizeof(response),
+                                "\n✗ KEXEC FAILED: %s\n"
+                                "The kernel upgrade did not complete successfully.\n"
+                                "System remains on current kernel.\n", kexec_error_string(result));
+            }
+        }
+
     } else {
         rlen = snprintf(response, sizeof(response),
                         "Unknown command: %s\n"
-                        "Available commands: status, caps, tree <component>, rdeps <capability>, simulate remove <component>, dot, log <component> [lines], readiness, check-readiness [component], upgrade <component>, check-cycles, analyze, validate, path <cap1> <cap2>, scc, checkpoint <component>, restore <component> [checkpoint_id], checkpoint-list [component], checkpoint-rm <component> <checkpoint_id>, migrate <component>\n", cmd);
+                        "Available commands: status, caps, tree <component>, rdeps <capability>, simulate remove <component>, dot, log <component> [lines], readiness, check-readiness [component], upgrade <component>, check-cycles, analyze, validate, path <cap1> <cap2>, scc, checkpoint <component>, restore <component> [checkpoint_id], checkpoint-list [component], checkpoint-rm <component> <checkpoint_id>, migrate <component>, kexec <kernel> [--initrd <initrd>] [--append <cmdline>], kexec --dry-run <kernel> [options]\n", cmd);
     }
 
     (void)!write(client_fd, response, rlen);
