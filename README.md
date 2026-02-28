@@ -182,4 +182,4 @@ It is an organism that emerges and adapts.
 
 ## License
 
-Public domain. Do what you want with it.
+GNU General Public License Version 2
