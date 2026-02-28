@@ -42,6 +42,7 @@ void capability_register(const char *name, int provider_idx) {
         strncpy(capabilities[idx].name, name, MAX_NAME - 1);
     }
     capabilities[idx].active = 1;
+    capabilities[idx].degraded = 0;  /* not degraded by default */
     capabilities[idx].provider_idx = provider_idx;
 
     /* Note: We can't log the provider name here since we don't have access
@@ -79,4 +80,19 @@ int capability_provider(int idx) {
         return capabilities[idx].provider_idx;
     }
     return -1;
+}
+
+int capability_degraded_by_idx(int idx) {
+    if (idx >= 0 && idx < n_capabilities) {
+        return capabilities[idx].degraded;
+    }
+    return 0; /* not degraded if not found */
+}
+
+void capability_mark_degraded(const char *name, int degraded) {
+    int idx = capability_index(name);
+    if (idx >= 0) {
+        capabilities[idx].degraded = degraded ? 1 : 0;
+        LOG_INFO("capability %s marked as %s", name, degraded ? "DEGRADED" : "HEALTHY");
+    }
 }

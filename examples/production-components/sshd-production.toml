@@ -1,0 +1,82 @@
+[component]
+name = "sshd"
+binary = "/usr/sbin/sshd"
+args = ["-D", "-e", "-f", "/etc/ssh/sshd_config"]
+type = "service"
+
+[provides]
+capabilities = ["ssh", "remote.access", "secure.shell"]
+sockets = ["/var/run/sshd.sock"]
+
+[requires]
+capabilities = ["network.configured", "ssh.hostkeys", "users", "logging"]
+
+[optional]
+capabilities = ["dns.resolver", "pam.authentication"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: SSH upgrades without dropping terminal sessions
+# This is THE showcase for YakirOS revolutionary capabilities!
+handoff = "fd-passing"
+reload_signal = "SIGHUP"
+restart_max = 3
+restart_window = 120
+
+# READINESS PROTOCOL: Verify SSH port accessibility and daemon health
+readiness_check = "/usr/bin/nc -z localhost 22 && /bin/kill -0 $PID"
+readiness_timeout = 20
+readiness_interval = 3
+
+[resources]
+memory_max = "256M"
+files_max = 1024
+processes_max = 256
+
+[hotswap]
+# CRITICAL: SSH connections must NEVER be dropped during upgrade
+# This demonstrates the ultimate zero-downtime capability
+transfer_fds = ["listening_sockets", "client_connections"]
+env_vars = ["SSHD_HOTSWAP=1", "SSHD_PRESERVE_CONNECTIONS=1"]
+shutdown_grace = 10
+
+# Connection state preservation
+preserve_state = [
+    "/var/run/sshd.pid",
+    "/run/sshd/*",
+    "/proc/$PID/fd/*"
+]
+
+# Enhanced hot-swap validation
+pre_swap_check = "/usr/bin/ssh -o ConnectTimeout=5 localhost exit"
+post_swap_check = "/usr/bin/nc -z localhost 22"
+
+# Hot-swap scenarios (THE REVOLUTIONARY DEMONSTRATIONS):
+# 1. Security patch: graphctl swap sshd /usr/sbin/sshd-patched
+#    → Terminal sessions continue without interruption
+#    → No users disconnected, no work lost
+#    → Security vulnerability patched instantly
+#
+# 2. Version upgrade: graphctl swap sshd /opt/openssh-9.1/sbin/sshd
+#    → Major version upgrade with zero downtime
+#    → All SSH tunnels and connections preserved
+#    → File transfers continue uninterrupted
+#
+# 3. Configuration change: graphctl swap sshd /usr/sbin/sshd-new-config
+#    → New SSH policies applied without reconnection
+#    → Active sessions maintain their settings
+#    → Gradual policy rollout possible
+
+[monitoring]
+# Health checks for hot-swap validation
+health_checks = [
+    "port_accessible:22",
+    "process_responding",
+    "connection_count_stable",
+    "authentication_working"
+]
+
+[security]
+# Security considerations for hot-swap
+validate_new_binary = true
+require_signed_binary = false  # Can be enabled for production
+audit_swap_events = true

@@ -1,0 +1,29 @@
+[component]
+name = "ssh-keygen"
+binary = "/bin/sh"
+args = ["-c", "test -f /etc/ssh/ssh_host_ed25519_key || /usr/bin/ssh-keygen -A"]
+type = "oneshot"
+
+[provides]
+capabilities = ["ssh.hostkeys", "ssh.certificates"]
+
+[requires]
+capabilities = ["filesystem.root.rw", "hardware.entropy"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+handoff = "none"
+restart_max = 2
+restart_window = 60
+
+# READINESS PROTOCOL: Verify all required host keys exist
+readiness_check = "test -f /etc/ssh/ssh_host_ed25519_key && test -f /etc/ssh/ssh_host_rsa_key"
+readiness_timeout = 30
+
+[resources]
+memory_max = "64M"
+
+# This oneshot component generates SSH host keys if they don't exist
+# Essential prerequisite for sshd service

@@ -1,0 +1,42 @@
+[component]
+name = "syslogd"
+binary = "/sbin/syslogd"
+args = ["-n", "-O", "/var/log/messages"]
+type = "service"
+
+[provides]
+capabilities = ["logging", "system.logging"]
+sockets = ["/dev/log"]
+
+[requires]
+capabilities = ["filesystem.var", "filesystem.run", "filesystem.dev"]
+
+[optional]
+capabilities = ["network.configured"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: Zero-downtime logging upgrades
+handoff = "fd-passing"
+reload_signal = "SIGHUP"
+restart_max = 3
+restart_window = 60
+
+# READINESS PROTOCOL: File-based readiness detection
+readiness_file = "/run/syslogd.ready"
+readiness_timeout = 15
+readiness_interval = 2
+
+[resources]
+memory_max = "64M"
+files_max = 256
+
+[hotswap]
+# Critical: Log messages must not be lost during upgrade
+transfer_fds = ["listening_sockets", "log_files"]
+env_vars = ["SYSLOGD_HOTSWAP=1"]
+shutdown_grace = 5
+
+# Hot-swap scenarios:
+# 1. Log rotation config: graphctl swap syslogd /sbin/syslogd-new-config
+# 2. Security patch: graphctl swap syslogd /sbin/syslogd-patched
+# 3. Version upgrade: graphctl swap syslogd /opt/syslog-ng/sbin/syslog-ng

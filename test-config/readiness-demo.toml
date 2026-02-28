@@ -1,0 +1,48 @@
+# Readiness Protocol Demonstration Components
+
+[component]
+name = "web-server-demo"
+type = "service"
+binary = "/bin/sleep"
+args = ["60"]
+
+[requires]
+capabilities = ["network"]
+
+[provides]
+capabilities = ["http-server"]
+
+[lifecycle]
+readiness_file = "/tmp/nginx-ready.flag"
+readiness_timeout = 30
+
+---
+
+[component]
+name = "database-demo"
+type = "service"
+binary = "/bin/sleep"
+args = ["60"]
+
+[provides]
+capabilities = ["database"]
+
+[lifecycle]
+readiness_check = "/bin/true"
+readiness_timeout = 45
+readiness_interval = 5
+
+---
+
+[component]
+name = "logger-demo"
+type = "service"
+binary = "/bin/sleep"
+args = ["60"]
+
+[provides]
+capabilities = ["logging"]
+
+[lifecycle]
+readiness_signal = "SIGUSR1"
+readiness_timeout = 15

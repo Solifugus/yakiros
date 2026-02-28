@@ -1,0 +1,48 @@
+[component]
+name = "dhcpcd"
+binary = "/sbin/dhcpcd"
+args = ["-B", "-q", "--noipv4ll"]
+type = "service"
+
+[provides]
+capabilities = ["network.configured", "dhcp.client", "network.ipv4"]
+
+[requires]
+capabilities = ["hardware.udev", "network.loopback"]
+
+[optional]
+capabilities = ["logging", "dns.resolver"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: Network reconfiguration without connection loss
+handoff = "state-file"
+reload_signal = "SIGHUP"
+restart_max = 5
+restart_window = 60
+
+# READINESS PROTOCOL: Verify network connectivity and IP assignment
+readiness_check = "/bin/ip route get 8.8.8.8 | grep -q 'via'"
+readiness_timeout = 45
+readiness_interval = 5
+
+[resources]
+memory_max = "32M"
+files_max = 64
+
+[hotswap]
+# Network connectivity must be preserved during reconfiguration
+state_file = "/run/dhcpcd.state"
+env_vars = ["DHCPCD_HOTSWAP=1"]
+shutdown_grace = 15
+
+# Preserve network state across swap
+preserve_state = [
+    "/run/dhcpcd.leases",
+    "/run/dhcpcd.pid",
+    "/var/lib/dhcpcd/*"
+]
+
+# Hot-swap scenarios:
+# 1. DHCP client updates: graphctl swap dhcpcd /sbin/dhcpcd-updated
+# 2. Network policy changes: graphctl swap dhcpcd /sbin/dhcpcd-new-policy
+# 3. Performance optimization: graphctl swap dhcpcd /opt/dhcpcd/sbin/dhcpcd

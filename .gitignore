@@ -1,0 +1,46 @@
+# Build artifacts
+*.o
+graph-resolver
+graphctl
+
+# Test executables
+tests/unit/test_*
+tests/integration/test_*
+tests/echo-server
+
+# VM and ISO files
+*.qcow2
+*.iso
+*.img
+*.vmdk
+*.vdi
+
+# Runtime files
+*.pid
+*.sock
+
+# Temporary and cache files
+.cache/
+tmp/
+
+# Archives and packages
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

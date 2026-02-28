@@ -1,0 +1,10 @@
+[component]
+name = "test-service"
+binary = "/bin/true"
+type = "oneshot"
+
+[provides]
+capabilities = ["test"]
+
+[requires]
+capabilities = []

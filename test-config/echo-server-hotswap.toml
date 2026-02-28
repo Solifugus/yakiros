@@ -1,0 +1,18 @@
+# Test echo server with hot-swap capability enabled
+
+[component]
+name = "echo-server"
+type = "service"
+binary = "/home/solifugus/development/YakirOS/tests/echo-server"
+args = ["8080"]
+
+[provides]
+capabilities = ["tcp-echo"]
+
+[requires]
+capabilities = ["network"]
+
+[lifecycle]
+handoff = "fd-passing"
+readiness_file = "/tmp/echo-server.ready"
+readiness_timeout = 10

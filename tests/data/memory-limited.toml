@@ -1,0 +1,15 @@
+[component]
+name = "memory-limited"
+binary = "/bin/sleep"
+args = ["60"]
+type = "service"
+
+[provides]
+capabilities = ["test.memory-limited"]
+
+[resources]
+cgroup = "test/memory-limited"
+memory_max = "16M"
+memory_high = "12M"
+cpu_weight = 200
+pids_max = 10

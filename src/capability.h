@@ -15,6 +15,7 @@
 typedef struct {
     char name[MAX_NAME];
     int  active;         /* 1 if this capability is currently provided */
+    int  degraded;       /* 1 if provider is in DEGRADED state */
     int  provider_idx;   /* index into components array */
 } capability_t;
 
@@ -41,6 +42,12 @@ int capability_active_by_idx(int idx);
 
 /* Get provider component index for a capability */
 int capability_provider(int idx);
+
+/* Check if capability is degraded by index */
+int capability_degraded_by_idx(int idx);
+
+/* Mark a capability as degraded */
+void capability_mark_degraded(const char *name, int degraded);
 
 /* Initialize/reset the capability registry */
 void capability_init(void);

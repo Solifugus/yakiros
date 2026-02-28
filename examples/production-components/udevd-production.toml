@@ -1,0 +1,48 @@
+[component]
+name = "udevd"
+binary = "/sbin/udevd"
+args = ["--daemon", "--resolve-names=never"]
+type = "service"
+
+[provides]
+capabilities = ["hardware.udev", "device.management", "hardware.detection"]
+sockets = ["/run/udev/control"]
+
+[requires]
+capabilities = ["filesystem.dev", "filesystem.sys", "filesystem.run"]
+
+[optional]
+capabilities = ["logging"]
+
+[lifecycle]
+# HOT-SWAP ENABLED: Driver and rule updates without hardware reinitialization
+handoff = "fd-passing"
+reload_signal = "SIGUSR1"
+restart_max = 2
+restart_window = 90
+
+# READINESS PROTOCOL: Check udev control socket and basic functionality
+readiness_check = "/sbin/udevadm info --export-db | head -1"
+readiness_timeout = 30
+readiness_interval = 5
+
+[resources]
+memory_max = "128M"
+files_max = 1024
+
+[hotswap]
+# Hardware management continuity critical for system stability
+transfer_fds = ["control_socket", "netlink_socket"]
+env_vars = ["UDEVD_HOTSWAP=1"]
+shutdown_grace = 10
+
+# Post-swap actions
+post_swap_commands = [
+    "/sbin/udevadm trigger --action=change",
+    "/sbin/udevadm settle --timeout=30"
+]
+
+# Hot-swap scenarios:
+# 1. New hardware rules: graphctl swap udevd /sbin/udevd-new-rules
+# 2. Driver updates: graphctl swap udevd /sbin/udevd-updated-drivers
+# 3. Performance optimization: graphctl swap udevd /opt/systemd/bin/systemd-udevd

@@ -1,0 +1,17 @@
+[component]
+name = "isolated-component"
+binary = "/bin/sleep"
+args = ["60"]
+type = "service"
+
+[provides]
+capabilities = ["test.isolated"]
+
+[resources]
+cgroup = "test/isolated"
+memory_max = "32M"
+cpu_weight = 100
+
+[isolation]
+namespaces = "mount,uts,pid"
+hostname = "test-container"

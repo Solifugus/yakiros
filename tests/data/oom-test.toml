@@ -1,0 +1,12 @@
+[component]
+name = "oom-test"
+binary = "/bin/bash"
+args = ["-c", "yes | head -c 50M > /dev/null"]
+type = "oneshot"
+
+[provides]
+capabilities = ["test.oom"]
+
+[resources]
+cgroup = "test/oom"
+memory_max = "8M"
